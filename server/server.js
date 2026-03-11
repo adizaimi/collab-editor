@@ -1,4 +1,3 @@
-// server/server.js
 const express = require("express")
 const http = require("http")
 const WebSocket = require("ws")
@@ -26,29 +25,28 @@ wss.on("connection",(ws,req)=>{
   const docId = url.searchParams.get("doc") || "main"
   ws.docId = docId
 
-  const text = docs.getText(docId)
-  ws.send(JSON.stringify({type:"init", text}))
+  // send full document text to new client
+  ws.send(JSON.stringify({type:"init", text:docs.getText(docId)}))
 
   ws.on("message", msg=>{
     const data = JSON.parse(msg)
-    if(data.type==="insert" || data.type==="delete"){
-      // server computes afterId
-      const crdt = docs.getCRDT(docId)
-      let op = data
-      if(data.type==="insert"){
-        // map offset to afterId
-        const afterId = crdt.getIdAtOffset(data.offset)
-        op = {type:"insert", id:`${Date.now()}:${Math.random()}`, value:data.value, after:afterId}
-      } else if(data.type==="delete"){
-        const crdtChars = crdt.getVisibleChars()
-        if(data.offset >= crdtChars.length) return
-        op = {type:"delete", id:crdtChars[data.offset].id}
-      }
+    const crdt = docs.getCRDT(docId)
+    let op = null
 
+    if(data.type==="insert"){
+      const afterId = crdt.getIdAtOffset(data.offset-1)
+      op = {type:"insert", id:`${Date.now()}:${Math.random()}`, value:data.value, after:afterId}
+    } else if(data.type==="delete"){
+      const chars = crdt.getVisibleChars()
+      if(data.offset >= chars.length) return
+      op = {type:"delete", id: chars[data.offset].id}
+    }
+
+    if(op){
       docs.applyOperation(docId, op)
       broadcast(docId, {type:"op", op})
     }
   })
 })
 
-server.listen(3000,()=>console.log("http://localhost:3000/?doc=test"))
+server.listen(3000,()=>console.log("Server running at http://localhost:3000/?doc=test"))

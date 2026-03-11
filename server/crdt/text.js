@@ -1,4 +1,3 @@
-// server/crdt/text.js
 class CRDTText {
   constructor() {
     this.root = "ROOT"
@@ -6,7 +5,7 @@ class CRDTText {
     this.chars.set(this.root, {id:this.root, value:"", left:null, right:[], deleted:false})
   }
 
-  insert(value, afterId, id) {
+  insert(value, afterId, id){
     if(this.chars.has(id)) return
     const left = this.chars.get(afterId)
     if(!left) return
@@ -15,14 +14,14 @@ class CRDTText {
     left.right.push(id)
   }
 
-  delete(id) {
+  delete(id){
     const node = this.chars.get(id)
     if(node) node.deleted = true
   }
 
-  getText() {
+  getText(){
     let out=""
-    const visit = (id) => {
+    const visit=(id)=>{
       const node = this.chars.get(id)
       if(id!==this.root && !node.deleted) out+=node.value
       for(const c of node.right) visit(c)
@@ -31,22 +30,20 @@ class CRDTText {
     return out
   }
 
-  // helper: find the CRDT char ID at a visible offset
+  getVisibleChars(){
+    return [...this.chars.values()].filter(c=>!c.deleted && c.id!==this.root)
+  }
+
   getIdAtOffset(offset){
-    let i=-1
-    let result=null
+    let i=-1, result=null
     const visit=(id)=>{
-      const node=this.chars.get(id)
+      const node = this.chars.get(id)
       if(id!==this.root && !node.deleted) i++
       if(i===offset){ result=id; return }
       for(const c of node.right){ if(!result) visit(c) }
     }
     visit(this.root)
     return result || this.root
-  }
-
-  getVisibleChars(){
-    return [...this.chars.values()].filter(c=>!c.deleted && c.id!==this.root)
   }
 }
 

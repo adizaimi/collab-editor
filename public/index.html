@@ -16,65 +16,69 @@ textarea { width:100%; height:400px; font-family:monospace; font-size:16px; }
 <script>
 const editor = document.getElementById("editor")
 const params = new URLSearchParams(location.search)
-const docId = params.get("doc")||"main"
-
+const docId = params.get("doc") || "main"
 const ws = new WebSocket(`ws://${location.host}?doc=${docId}`)
+
+// Server-authoritative: clients never apply local input
 let lastText = ""
 
-// Helper to apply server operations incrementally
-function applyOp(msg){
+// Apply server-broadcasted ops
+function applyOp(op){
   const textArr = editor.value.split("")
   const selStart = editor.selectionStart
   const selEnd = editor.selectionEnd
 
-  if(msg.op.type==="insert"){
-    // insert *at* offset
-    textArr.splice(msg.op.offset,0,msg.op.value)
-  } else if(msg.op.type==="delete"){
-    // remove 1 char at offset
-    if(msg.op.offset < textArr.length)
-      textArr.splice(msg.op.offset,1)
+  if(op.type === "insert"){
+    textArr.splice(op.offset,0,op.value)
+  } else if(op.type === "delete"){
+    if(op.offset < textArr.length) textArr.splice(op.offset,1)
   }
 
   editor.value = textArr.join("")
-  // restore cursor
+  // preserve cursor
   editor.selectionStart = selStart
   editor.selectionEnd = selEnd
   lastText = editor.value
 }
 
-ws.onmessage = e=>{
+// Receive ops from server
+ws.onmessage = e => {
   const msg = JSON.parse(e.data)
-  if(msg.type==="init"){
+  if(msg.type === "init"){
     editor.value = msg.text
     lastText = editor.value
   }
-  if(msg.type==="op"){
-    applyOp(msg)
+  if(msg.type === "op"){
+    applyOp(msg.op)
   }
 }
 
-// Listen for local typing
-editor.addEventListener("input", e=>{
+// Capture typing intents but do NOT apply locally
+editor.addEventListener("input", e => {
   const text = editor.value
   const diff = text.length - lastText.length
   const sel = editor.selectionStart
 
-  if(diff>0){
-    // insertion
+  if(diff > 0){
     const inserted = text.slice(sel - diff, sel)
-    for(let i=0;i<inserted.length;i++){
-      // send offset of the *existing text before the inserted char*
-      ws.send(JSON.stringify({type:"insert", value:inserted[i], offset: sel - diff + i}))
+    for(let i=0; i<inserted.length; i++){
+      ws.send(JSON.stringify({
+        type: "insert",
+        value: inserted[i],
+        offset: sel - diff + i
+      }))
     }
-  } else if(diff<0){
-    // deletion
-    for(let i=0;i<-diff;i++){
-      ws.send(JSON.stringify({type:"delete", offset: sel}))
+  } else if(diff < 0){
+    for(let i=0; i<-diff; i++){
+      ws.send(JSON.stringify({
+        type: "delete",
+        offset: sel
+      }))
     }
   }
 
-  lastText = editor.value
+  // Reset textarea to last server-authoritative text
+  editor.value = lastText
 })
 </script>
 

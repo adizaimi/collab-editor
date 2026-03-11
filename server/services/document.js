@@ -1,4 +1,3 @@
-// server/services/document.js
 const CRDTText = require("../crdt/text")
 
 class DocumentService {
