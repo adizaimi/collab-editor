@@ -9,7 +9,13 @@
     "ws": "^8.16.0"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node test/run-all-tests.js",
+    "test:unit": "node test/unit/crdt.test.js && node test/unit/document-service.test.js && node test/unit/sqlite-storage.test.js",
+    "test:unit:crdt": "node test/unit/crdt.test.js",
+    "test:unit:document": "node test/unit/document-service.test.js",
+    "test:unit:storage": "node test/unit/sqlite-storage.test.js",
+    "test:e2e": "node test/e2e/server-client.test.js",
+    "start": "node server/server.js"
   },
   "keywords": [],
   "author": "",

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Backspace vs Delete Test</title>
+<style>
+body { font-family: sans-serif; margin: 40px; }
+.test { margin: 20px 0; padding: 15px; border: 1px solid #ccc; background: #f9f9f9; }
+textarea { width: 100%; height: 100px; font-family: monospace; font-size: 16px; margin: 10px 0; }
+button { padding: 8px 15px; margin: 5px; cursor: pointer; }
+.result { margin-top: 10px; padding: 10px; background: white; font-family: monospace; }
+.pass { color: green; font-weight: bold; }
+.fail { color: red; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1>Backspace vs Delete Key Test</h1>
+
+<div class="test">
+  <h3>Test 1: Backspace Key</h3>
+  <p>Type "HELLO", place cursor after "L" (position 3), press Backspace</p>
+  <p>Expected: "HELO" (first L deleted)</p>
+  <textarea id="test1" placeholder="Type here and test Backspace..."></textarea>
+  <button onclick="setupTest1()">Setup Test 1</button>
+  <div class="result" id="result1"></div>
+</div>
+
+<div class="test">
+  <h3>Test 2: Delete Key</h3>
+  <p>Type "HELLO", place cursor after "L" (position 3), press Delete</p>
+  <p>Expected: "HELO" (second L deleted)</p>
+  <textarea id="test2" placeholder="Type here and test Delete..."></textarea>
+  <button onclick="setupTest2()">Setup Test 2</button>
+  <div class="result" id="result2"></div>
+</div>
+
+<div class="test">
+  <h3>Test 3: Visual Difference</h3>
+  <p>Compare Backspace and Delete behavior side-by-side</p>
+  <div style="display: flex; gap: 20px;">
+    <div style="flex: 1;">
+      <strong>Backspace (before cursor):</strong>
+      <textarea id="test3a" placeholder="Type HELLO, cursor at position 3, press Backspace"></textarea>
+      <button onclick="setupTest3('a')">Setup</button>
+      <div class="result" id="result3a"></div>
+    </div>
+    <div style="flex: 1;">
+      <strong>Delete (after cursor):</strong>
+      <textarea id="test3b" placeholder="Type HELLO, cursor at position 3, press Delete"></textarea>
+      <button onclick="setupTest3('b')">Setup</button>
+      <div class="result" id="result3b"></div>
+    </div>
+  </div>
+</div>
+
+<div class="test">
+  <h3>Instructions</h3>
+  <ol>
+    <li>Click "Setup" button to prepare the test with "HELLO" text</li>
+    <li>Cursor will be placed at position 3 (between two L's)</li>
+    <li>For Backspace test: Press Backspace key - should delete first L → "HELO"</li>
+    <li>For Delete test: Press Delete key - should delete second L → "HELO"</li>
+    <li>Note: Both result in "HELO" but delete different characters!</li>
+  </ol>
+  <p><strong>Key Difference:</strong></p>
+  <ul>
+    <li><code>Backspace</code>: Deletes character BEFORE cursor (to the left)</li>
+    <li><code>Delete</code>: Deletes character AFTER cursor (to the right/at cursor)</li>
+  </ul>
+</div>
+
+<script>
+function setupTest1() {
+  const textarea = document.getElementById("test1")
+  textarea.value = "HELLO"
+  textarea.focus()
+  textarea.setSelectionRange(3, 3) // After first L
+  document.getElementById("result1").innerHTML =
+    `Setup complete. Text: "${textarea.value}", Cursor at position 3.<br>` +
+    `Press <strong>Backspace</strong> to delete first L.`
+}
+
+function setupTest2() {
+  const textarea = document.getElementById("test2")
+  textarea.value = "HELLO"
+  textarea.focus()
+  textarea.setSelectionRange(3, 3) // After first L
+  document.getElementById("result2").innerHTML =
+    `Setup complete. Text: "${textarea.value}", Cursor at position 3.<br>` +
+    `Press <strong>Delete</strong> to delete second L.`
+}
+
+function setupTest3(variant) {
+  const textarea = document.getElementById("test3" + variant)
+  textarea.value = "HELLO"
+  textarea.focus()
+  textarea.setSelectionRange(3, 3)
+  document.getElementById("result3" + variant).innerHTML =
+    `Ready. Cursor at position 3. Press ${variant === 'a' ? 'Backspace' : 'Delete'}.`
+}
+
+// Monitor input events to show what happened
+document.querySelectorAll("textarea").forEach(textarea => {
+  textarea.addEventListener("beforeinput", (e) => {
+    const resultId = "result" + textarea.id.replace("test", "")
+    const resultDiv = document.getElementById(resultId)
+    if(!resultDiv) return
+
+    const type = e.inputType
+    const isBackspace = type === "deleteContentBackward"
+    const isDelete = type === "deleteContentForward"
+
+    if(isBackspace || isDelete) {
+      setTimeout(() => {
+        const newValue = textarea.value
+        const cursor = textarea.selectionStart
+        resultDiv.innerHTML =
+          `<strong>${isBackspace ? '⌫ Backspace' : '⌦ Delete'}</strong> pressed<br>` +
+          `Input Type: <code>${type}</code><br>` +
+          `Result: "${newValue}"<br>` +
+          `Cursor now at: ${cursor}<br>` +
+          `<span class="${newValue === 'HELO' ? 'pass' : 'fail'}">` +
+          `${newValue === 'HELO' ? '✅ Correct!' : '❌ Unexpected result'}` +
+          `</span>`
+      }, 10)
+    }
+  })
+})
+</script>
+
+</body>
+</html>

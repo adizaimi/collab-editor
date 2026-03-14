@@ -24,12 +24,14 @@ let serverText = "" // Server-authoritative state
 let applying = false // Flag to prevent input handler during apply
 let lastSelStart = 0
 let lastSelEnd = 0
+let lastInputType = ""
 
-// Track selection before input
-editor.addEventListener("beforeinput", () => {
+// Track selection and input type before input
+editor.addEventListener("beforeinput", (e) => {
   if(!applying){
     lastSelStart = editor.selectionStart
     lastSelEnd = editor.selectionEnd
+    lastInputType = e.inputType || ""
   }
 })
 
@@ -117,8 +119,15 @@ editor.addEventListener("input", e => {
     // Backspace/delete with no selection
     const deleteCount = -inserted
     for(let i = 0; i < deleteCount; i++){
-      // Determine offset based on cursor position
-      const offset = cursorPos < selStart ? cursorPos : selStart - 1
+      let offset
+      // Differentiate between Backspace and Delete keys
+      if(lastInputType === "deleteContentForward"){
+        // Delete key: delete character AFTER cursor (at cursor position)
+        offset = cursorPos
+      } else {
+        // Backspace key (deleteContentBackward) or default: delete BEFORE cursor
+        offset = cursorPos < selStart ? cursorPos : selStart - 1
+      }
       ws.send(JSON.stringify({
         type: "delete",
         offset: Math.max(0, offset),
