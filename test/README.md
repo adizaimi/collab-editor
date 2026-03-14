@@ -9,7 +9,9 @@ test/
 ├── unit/                    # Unit tests (automated)
 │   ├── crdt.test.js                  # CRDT data structure (21 tests, 55 assertions)
 │   ├── document-service.test.js      # Document management (13 tests, 28 assertions)
-│   └── sqlite-storage.test.js        # Database operations (13 tests, 42 assertions)
+│   ├── sqlite-storage.test.js        # Database operations (13 tests, 42 assertions)
+│   ├── operation-buffer.test.js      # Operation batching (12 tests, 12 assertions)
+│   └── snapshot.test.js              # Snapshot system (10 tests, 10 assertions)
 ├── e2e/                     # End-to-end tests (automated)
 │   └── server-client.test.js         # Integration tests (12 tests, 16 assertions)
 ├── manual/                  # Manual browser tests
@@ -22,6 +24,7 @@ test/
 │   ├── replace-test.js               # Text replacement example
 │   ├── simple-test.js                # Simple CRDT demo
 │   ├── debug-crdt.js                 # CRDT tree visualization
+│   ├── backspace-delete-doc.js       # Backspace/Delete documentation
 │   └── README.md                     # Examples docs
 └── run-all-tests.js         # Main test runner
 ```
@@ -62,15 +65,15 @@ node test/e2e/server-client.test.js
 
 ## Test Statistics
 
-- **Total Test Suites**: 4 (3 unit, 1 e2e)
-- **Total Tests**: 47
-- **Total Assertions**: 141
+- **Total Test Suites**: 6 (5 unit, 1 e2e)
+- **Total Tests**: 81
+- **Total Assertions**: 163
 - **Execution Time**: ~10 seconds
 - **Success Rate**: 100% ✅
 
 ## What's Tested
 
-### Unit Tests (125 assertions)
+### Unit Tests (147 assertions)
 
 **CRDT (21 tests, 55 assertions)**
 - Constructor initialization
@@ -94,6 +97,23 @@ node test/e2e/server-client.test.js
 - Operation persistence (insert/delete)
 - Data retrieval and filtering
 - Multi-document support
+
+**OperationBuffer (12 tests, 12 assertions)**
+- Consecutive insert batching
+- Consecutive delete batching (backspace and delete key)
+- Batch breaking conditions (client change, offset gap, type change)
+- Single operation handling
+- Automatic flush on timeout
+- Manual flush functionality
+
+**Snapshot System (10 tests, 10 assertions)**
+- Snapshot creation and loading
+- Multiple snapshot management
+- Operations since snapshot loading
+- Old operation archival
+- CRDT serialization/deserialization
+- Snapshot threshold detection
+- Integration with DocumentService
 
 ### End-to-End Tests (16 assertions)
 
@@ -142,31 +162,22 @@ When you run `npm test`, you'll see:
 ============================================================
      COLLABORATIVE DOCUMENT EDITOR - TEST SUITE
 ============================================================
-Total Test Suites: 4
-Unit Tests: 3
+Total Test Suites: 6
+Unit Tests: 5
 E2E Tests: 1
 
-Running: CRDT Unit Tests
-✅ PASSED - 55 assertions (0.04s)
+Unit Tests:
+  ✅ PASSED - CRDT Unit Tests (55 assertions)
+  ✅ PASSED - DocumentService Unit Tests (28 assertions)
+  ✅ PASSED - SQLiteStorage Unit Tests (42 assertions)
+  ✅ PASSED - OperationBuffer Unit Tests (12 assertions)
+  ✅ PASSED - Snapshot System Unit Tests (10 assertions)
 
-Running: DocumentService Unit Tests
-✅ PASSED - 28 assertions (0.04s)
+End-to-End Tests:
+  ✅ PASSED - Server-Client E2E Tests (16 assertions)
 
-Running: SQLiteStorage Unit Tests
-✅ PASSED - 42 assertions (0.06s)
-
-Running: Server-Client E2E Tests
-✅ PASSED - 16 assertions (9.85s)
-
-============================================================
-                    TEST SUMMARY
-============================================================
-Total Suites: 4
-✅ Passed: 4
-❌ Failed: 0
-Duration: 10.04s
-============================================================
-
+Total: 163 assertions across 81 tests
+Duration: ~10 seconds
 All tests passed! 🎉
 ```
 

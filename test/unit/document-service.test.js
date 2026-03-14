@@ -4,12 +4,13 @@ const DocumentService = require("../../server/services/document")
 class MockStorage {
   constructor() {
     this.operations = []
+    this.snapshots = []
   }
 
   init() {}
 
   saveOperation(docId, op) {
-    this.operations.push({ docId, ...op })
+    this.operations.push({ docId, ...op, created_at: Date.now() })
   }
 
   loadOperations(docId) {
@@ -19,12 +20,46 @@ class MockStorage {
         type: op.type,
         op_id: op.id,
         value: op.value,
-        after_id: op.after
+        after_id: op.after,
+        created_at: op.created_at
       }))
+  }
+
+  saveSnapshot(docId, content) {
+    this.snapshots.push({ doc_id: docId, content, created_at: Date.now() })
+  }
+
+  loadLatestSnapshot(docId) {
+    const docSnapshots = this.snapshots.filter(s => s.doc_id === docId)
+    if (docSnapshots.length === 0) return null
+    return docSnapshots[docSnapshots.length - 1]
+  }
+
+  loadOperationsSinceSnapshot(docId, timestamp) {
+    return this.operations
+      .filter(op => op.docId === docId && op.created_at > timestamp)
+      .map(op => ({
+        type: op.type,
+        op_id: op.id,
+        value: op.value,
+        after_id: op.after,
+        created_at: op.created_at
+      }))
+  }
+
+  deleteOldOperations(docId, timestamp) {
+    this.operations = this.operations.filter(
+      op => !(op.docId === docId && op.created_at <= timestamp)
+    )
+  }
+
+  getOperationCount(docId) {
+    return this.operations.filter(op => op.docId === docId).length
   }
 
   clear() {
     this.operations = []
+    this.snapshots = []
   }
 }
 

@@ -95,6 +95,42 @@ class CRDTText {
     visit(this.root)
     return result
   }
+
+  /**
+   * Serialize CRDT state to JSON (for snapshots)
+   */
+  serialize() {
+    const chars = Array.from(this.chars.entries()).map(([id, node]) => ({
+      id,
+      value: node.value,
+      left: node.left,
+      right: node.right,
+      deleted: node.deleted
+    }))
+    return JSON.stringify({ root: this.root, chars })
+  }
+
+  /**
+   * Deserialize CRDT state from JSON (for loading snapshots)
+   */
+  static deserialize(json) {
+    const data = JSON.parse(json)
+    const crdt = new CRDTText()
+    crdt.root = data.root
+    crdt.chars.clear()
+
+    for (const node of data.chars) {
+      crdt.chars.set(node.id, {
+        id: node.id,
+        value: node.value,
+        left: node.left,
+        right: node.right,
+        deleted: node.deleted
+      })
+    }
+
+    return crdt
+  }
 }
 
 module.exports = CRDTText

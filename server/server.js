@@ -6,7 +6,15 @@ const DocumentService = require("./services/document")
 
 const storage = new SQLiteStorage()
 storage.init()
-const docs = new DocumentService(storage)
+const docs = new DocumentService(storage, true) // Enable batching
+
+// Snapshot configuration
+const SNAPSHOT_THRESHOLD = 100 // Create snapshot every 100 operations
+const SNAPSHOT_IDLE_TIME = 10000 // Create snapshot after 10s of inactivity
+
+// Track last operation time per document for idle snapshots
+const lastOperationTime = new Map()
+const snapshotTimers = new Map()
 
 const app = express()
 app.use(express.static("public"))
@@ -37,10 +45,11 @@ wss.on("connection",(ws,req)=>{
     if(data.type==="insert"){
       const afterId = crdt.getIdAtOffset(data.offset - 1)
       op = {type:"insert", id:`${Date.now()}:${Math.random()}`, value:data.value, after:afterId}
-      docs.applyOperation(docId, op)
-      // Calculate offset after insertion
-      const offset = crdt.getOffsetOfId(op.id)
-      broadcastOp = {type:"insert", offset, value:data.value, clientId:data.clientId}
+
+      // Apply with batching
+      const actualOffset = docs.applyOperationWithBatching(docId, op, data.clientId)
+
+      broadcastOp = {type:"insert", offset: actualOffset, value:data.value, clientId:data.clientId}
     } else if(data.type==="delete"){
       const chars = crdt.getVisibleChars()
       let charId = null
@@ -63,15 +72,69 @@ wss.on("connection",(ws,req)=>{
 
       op = {type:"delete", id: charId}
       // Calculate offset before deletion
-      const offset = crdt.getOffsetOfId(op.id)
-      docs.applyOperation(docId, op)
-      broadcastOp = {type:"delete", offset, clientId:data.clientId}
+      const offsetBeforeDelete = crdt.getOffsetOfId(op.id)
+
+      // Apply with batching
+      docs.applyOperationWithBatching(docId, op, data.clientId, offsetBeforeDelete)
+
+      broadcastOp = {type:"delete", offset: offsetBeforeDelete, clientId:data.clientId}
     }
 
     if(broadcastOp){
       broadcast(docId, {type:"op", op:broadcastOp})
     }
+
+    // Track operation time for idle snapshot
+    lastOperationTime.set(docId, Date.now())
+
+    // Reset snapshot idle timer
+    if(snapshotTimers.has(docId)){
+      clearTimeout(snapshotTimers.get(docId))
+    }
+    snapshotTimers.set(docId, setTimeout(() => {
+      createIdleSnapshot(docId)
+    }, SNAPSHOT_IDLE_TIME))
+
+    // Check if snapshot needed based on operation count
+    if(docs.shouldCreateSnapshot(docId, SNAPSHOT_THRESHOLD)){
+      createSnapshot(docId)
+    }
   })
+})
+
+// Helper function to create snapshot
+function createSnapshot(docId) {
+  try {
+    docs.createSnapshot(docId)
+    console.log(`[Snapshot] Created snapshot for document: ${docId}`)
+  } catch (err) {
+    console.error(`[Snapshot] Error creating snapshot for ${docId}:`, err)
+  }
+}
+
+// Helper function to create snapshot on idle
+function createIdleSnapshot(docId) {
+  // Flush buffer and create snapshot
+  docs.flushBuffer(docId)
+  console.log(`[Snapshot] Flushed buffer for document: ${docId} (idle)`)
+
+  // Optionally create snapshot on idle (commented out to avoid too many snapshots)
+  // createSnapshot(docId)
+}
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('\n[Shutdown] Flushing all buffers before exit...')
+  docs.flushBuffers()
+  console.log('[Shutdown] Buffers flushed. Exiting.')
+  process.exit(0)
+})
+
+process.on('SIGTERM', () => {
+  console.log('\n[Shutdown] Flushing all buffers before exit...')
+  docs.flushBuffers()
+  console.log('[Shutdown] Buffers flushed. Exiting.')
+  process.exit(0)
 })
 
 server.listen(3000,()=>console.log("Server running at http://localhost:3000/?doc=test"))

@@ -32,6 +32,16 @@ const testSuites = [
     type: "unit"
   },
   {
+    name: "OperationBuffer Unit Tests",
+    path: path.join(__dirname, "unit/operation-buffer.test.js"),
+    type: "unit"
+  },
+  {
+    name: "Snapshot System Unit Tests",
+    path: path.join(__dirname, "unit/snapshot.test.js"),
+    type: "unit"
+  },
+  {
     name: "Server-Client E2E Tests",
     path: path.join(__dirname, "e2e/server-client.test.js"),
     type: "e2e"
