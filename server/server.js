@@ -32,19 +32,44 @@ wss.on("connection",(ws,req)=>{
     const data = JSON.parse(msg)
     const crdt = docs.getCRDT(docId)
     let op = null
+    let broadcastOp = null
 
     if(data.type==="insert"){
-      const afterId = crdt.getIdAtOffset(data.offset-1)
+      const afterId = crdt.getIdAtOffset(data.offset - 1)
       op = {type:"insert", id:`${Date.now()}:${Math.random()}`, value:data.value, after:afterId}
+      docs.applyOperation(docId, op)
+      // Calculate offset after insertion
+      const offset = crdt.getOffsetOfId(op.id)
+      broadcastOp = {type:"insert", offset, value:data.value, clientId:data.clientId}
     } else if(data.type==="delete"){
       const chars = crdt.getVisibleChars()
-      if(data.offset >= chars.length) return
-      op = {type:"delete", id: chars[data.offset].id}
+      let charId = null
+
+      // Try to find character at offset
+      if(data.offset < chars.length){
+        charId = chars[data.offset].id
+      }
+      // If offset is stale, try to find by character value
+      else if(data.char){
+        for(const c of chars){
+          if(c.value === data.char){
+            charId = c.id
+            break
+          }
+        }
+      }
+
+      if(!charId) return // Character not found
+
+      op = {type:"delete", id: charId}
+      // Calculate offset before deletion
+      const offset = crdt.getOffsetOfId(op.id)
+      docs.applyOperation(docId, op)
+      broadcastOp = {type:"delete", offset, clientId:data.clientId}
     }
 
-    if(op){
-      docs.applyOperation(docId, op)
-      broadcast(docId, {type:"op", op})
+    if(broadcastOp){
+      broadcast(docId, {type:"op", op:broadcastOp})
     }
   })
 })

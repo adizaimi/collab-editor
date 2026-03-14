@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Manual Test</title>
+<style>
+body { font-family: sans-serif; margin: 40px; }
+.test { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+button { padding: 5px 10px; margin: 5px; }
+.result { margin-top: 10px; font-family: monospace; }
+</style>
+</head>
+<body>
+
+<h2>Manual Test Cases</h2>
+
+<div class="test">
+  <h3>Test 1: Type in middle</h3>
+  <p>Initial text: "HELLO"</p>
+  <p>Action: Click between E and L, type "X"</p>
+  <p>Expected: "HEXLLO"</p>
+  <button onclick="test1()">Run Test 1</button>
+  <div class="result" id="result1"></div>
+</div>
+
+<div class="test">
+  <h3>Test 2: Replace selection</h3>
+  <p>Initial text: "HELLO WORLD"</p>
+  <p>Action: Select "WORLD", type "THERE"</p>
+  <p>Expected: "HELLO THERE"</p>
+  <button onclick="test2()">Run Test 2</button>
+  <div class="result" id="result2"></div>
+</div>
+
+<div class="test">
+  <h3>Test 3: Delete in middle</h3>
+  <p>Initial text: "HELLO"</p>
+  <p>Action: Click after L, press Backspace</p>
+  <p>Expected: "HELO"</p>
+  <button onclick="test3()">Run Test 3</button>
+  <div class="result" id="result3"></div>
+</div>
+
+<script>
+const WS_URL = "ws://localhost:3000"
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function runTest(docId, operations, expected) {
+  const ws = new WebSocket(`${WS_URL}?doc=${docId}`)
+  const clientId = Math.random().toString(36).substring(7)
+  let serverText = ""
+
+  return new Promise((resolve) => {
+    ws.onopen = async () => {
+      await sleep(200)
+
+      for (const op of operations) {
+        if (op.type === "insert") {
+          ws.send(JSON.stringify({
+            type: "insert",
+            value: op.value,
+            offset: op.offset,
+            clientId
+          }))
+        } else if (op.type === "delete") {
+          ws.send(JSON.stringify({
+            type: "delete",
+            offset: op.offset,
+            char: serverText[op.offset],
+            clientId
+          }))
+        }
+        await sleep(50)
+      }
+
+      await sleep(300)
+
+      const passed = serverText === expected
+      ws.close()
+      resolve({ serverText, expected, passed })
+    }
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data)
+      if (msg.type === "init") {
+        serverText = msg.text
+      }
+      if (msg.type === "op") {
+        const textArr = serverText.split("")
+        if (msg.op.type === "insert") {
+          textArr.splice(msg.op.offset, 0, msg.op.value)
+        } else if (msg.op.type === "delete") {
+          textArr.splice(msg.op.offset, 1)
+        }
+        serverText = textArr.join("")
+      }
+    }
+  })
+}
+
+async function test1() {
+  const result = document.getElementById("result1")
+  result.textContent = "Running..."
+
+  const operations = [
+    // Insert HELLO
+    { type: "insert", value: "H", offset: 0 },
+    { type: "insert", value: "E", offset: 1 },
+    { type: "insert", value: "L", offset: 2 },
+    { type: "insert", value: "L", offset: 3 },
+    { type: "insert", value: "O", offset: 4 },
+    // Insert X at position 2
+    { type: "insert", value: "X", offset: 2 }
+  ]
+
+  const { serverText, expected, passed } = await runTest("test1", operations, "HEXLLO")
+  result.textContent = `Result: "${serverText}" | Expected: "${expected}" | ${passed ? "✅ PASSED" : "❌ FAILED"}`
+}
+
+async function test2() {
+  const result = document.getElementById("result2")
+  result.textContent = "Running..."
+
+  const operations = [
+    // Insert HELLO WORLD
+    ..."HELLO WORLD".split("").map((c, i) => ({ type: "insert", value: c, offset: i })),
+    // Delete WORLD (positions 6-10)
+    { type: "delete", offset: 6 },
+    { type: "delete", offset: 6 },
+    { type: "delete", offset: 6 },
+    { type: "delete", offset: 6 },
+    { type: "delete", offset: 6 },
+    // Insert THERE at position 6
+    { type: "insert", value: "T", offset: 6 },
+    { type: "insert", value: "H", offset: 7 },
+    { type: "insert", value: "E", offset: 8 },
+    { type: "insert", value: "R", offset: 9 },
+    { type: "insert", value: "E", offset: 10 }
+  ]
+
+  const { serverText, expected, passed } = await runTest("test2", operations, "HELLO THERE")
+  result.textContent = `Result: "${serverText}" | Expected: "${expected}" | ${passed ? "✅ PASSED" : "❌ FAILED"}`
+}
+
+async function test3() {
+  const result = document.getElementById("result3")
+  result.textContent = "Running..."
+
+  const operations = [
+    // Insert HELLO
+    { type: "insert", value: "H", offset: 0 },
+    { type: "insert", value: "E", offset: 1 },
+    { type: "insert", value: "L", offset: 2 },
+    { type: "insert", value: "L", offset: 3 },
+    { type: "insert", value: "O", offset: 4 },
+    // Delete at position 2 (first L)
+    { type: "delete", offset: 2 }
+  ]
+
+  const { serverText, expected, passed } = await runTest("test3", operations, "HELO")
+  result.textContent = `Result: "${serverText}" | Expected: "${expected}" | ${passed ? "✅ PASSED" : "❌ FAILED"}`
+}
+</script>
+
+</body>
+</html>

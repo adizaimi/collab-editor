@@ -11,7 +11,10 @@ class CRDTText {
     if(!left) return
     const char = {id, value, left:afterId, right:[], deleted:false}
     this.chars.set(id,char)
-    left.right.push(id)
+
+    // Insert at the beginning of right array (most recent insertion wins position)
+    // This ensures that when inserting at the same position, the latest insert appears first
+    left.right.unshift(id)
   }
 
   delete(id){
@@ -31,7 +34,18 @@ class CRDTText {
   }
 
   getVisibleChars(){
-    return [...this.chars.values()].filter(c=>!c.deleted && c.id!==this.root)
+    const result = []
+    const visit = (id) => {
+      const node = this.chars.get(id)
+      if(id !== this.root && !node.deleted) {
+        result.push(node)
+      }
+      for(const c of node.right) {
+        visit(c)
+      }
+    }
+    visit(this.root)
+    return result
   }
 
   getIdAtOffset(offset){
@@ -44,6 +58,42 @@ class CRDTText {
     }
     visit(this.root)
     return result || this.root
+  }
+
+  getOffsetOfId(targetId){
+    let offset = 0
+    const visit = (id) => {
+      if(id === targetId) return true
+      const node = this.chars.get(id)
+      if(id !== this.root && !node.deleted) offset++
+      for(const c of node.right) {
+        if(visit(c)) return true
+      }
+      return false
+    }
+    visit(this.root)
+    return offset
+  }
+
+  findIdByValueAtOffset(value, targetOffset){
+    let currentOffset = -1
+    let result = null
+    const visit = (id) => {
+      const node = this.chars.get(id)
+      if(id !== this.root && !node.deleted) {
+        currentOffset++
+        if(currentOffset === targetOffset && node.value === value) {
+          result = id
+          return true
+        }
+      }
+      for(const c of node.right) {
+        if(visit(c)) return true
+      }
+      return false
+    }
+    visit(this.root)
+    return result
   }
 }
 
