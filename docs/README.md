@@ -4,7 +4,23 @@ This directory contains detailed technical documentation for the collaborative d
 
 ## 📄 Available Documents
 
-### [Technical Architecture](TECHNICAL_ARCHITECTURE.md) ⭐ NEW
+### [Async Operation Queue](ASYNC_OPERATION_QUEUE.md) ⭐ NEW
+**Better burst handling with asynchronous operation processing**
+
+Comprehensive guide covering:
+- Architecture and benefits (5-10x better burst handling)
+- How async queue works (instant UI, deferred DB writes)
+- Performance comparison (sync vs async)
+- Configuration options and tuning
+- Multi-document concurrent testing
+- Migration guide from sync buffer
+- Queue statistics and monitoring
+
+**When to read**: To enable better throughput and burst handling in production.
+
+---
+
+### [Technical Architecture](TECHNICAL_ARCHITECTURE.md)
 **Complete deep-dive into server and CRDT implementation**
 
 Comprehensive technical guide covering:

@@ -1,12 +1,35 @@
 const CRDTText = require("../crdt/text")
 const OperationBuffer = require("./operation-buffer")
+const OperationQueue = require("./operation-queue")
 
 class DocumentService {
-  constructor(storage, enableBatching = true){
+  constructor(storage, options = {}){
+    // Support both old API (enableBatching boolean) and new API (options object)
+    if (typeof options === 'boolean') {
+      options = { enableBatching: options }
+    }
+
+    const {
+      enableBatching = true,
+      useAsyncQueue = false,  // New: use async operation queue
+      queueOptions = {}
+    } = options
+
     this.storage = storage
     this.docs = new Map()
-    this.buffer = enableBatching ? new OperationBuffer(storage) : null
     this.operationCounts = new Map() // Track op count in memory to avoid DB queries
+
+    // Choose between sync buffer or async queue
+    if (useAsyncQueue) {
+      this.buffer = new OperationQueue(storage, queueOptions)
+      this.isAsync = true
+    } else if (enableBatching) {
+      this.buffer = new OperationBuffer(storage)
+      this.isAsync = false
+    } else {
+      this.buffer = null
+      this.isAsync = false
+    }
   }
 
   loadDocument(docId){
@@ -112,7 +135,7 @@ class DocumentService {
       actualOffset = doc.getOffsetOfId(op.id)
     }
 
-    // Apply to CRDT
+    // Apply to CRDT immediately (for real-time UI)
     if(op.type==="insert") {
       doc.insert(op.value, op.after, op.id)
       // For inserts, get offset after insertion
@@ -122,10 +145,17 @@ class DocumentService {
       doc.delete(op.id)
     }
 
-    // Add to buffer or save directly
+    // Add to buffer/queue or save directly
     if (this.buffer) {
-      this.buffer.addOperation(docId, op, clientId, actualOffset)
+      if (this.isAsync) {
+        // Async queue - returns immediately, DB write happens in background
+        this.buffer.enqueue(docId, op, clientId, actualOffset)
+      } else {
+        // Sync buffer - adds to buffer with timeout
+        this.buffer.addOperation(docId, op, clientId, actualOffset)
+      }
     } else {
+      // No batching - write directly to DB
       this.storage.saveOperation(docId, op)
     }
 
@@ -184,21 +214,39 @@ class DocumentService {
   }
 
   /**
-   * Flush all operation buffers
+   * Flush all operation buffers/queues
    */
-  flushBuffers(){
+  async flushBuffers(){
     if (this.buffer) {
-      this.buffer.flushAll()
+      if (this.isAsync) {
+        await this.buffer.flushAll()
+      } else {
+        this.buffer.flushAll()
+      }
     }
   }
 
   /**
-   * Flush buffer for specific document
+   * Flush buffer/queue for specific document
    */
-  flushBuffer(docId){
+  async flushBuffer(docId){
     if (this.buffer) {
-      this.buffer.flush(docId)
+      if (this.isAsync) {
+        await this.buffer.flush(docId)
+      } else {
+        this.buffer.flush(docId)
+      }
     }
+  }
+
+  /**
+   * Get operation queue statistics (for async mode)
+   */
+  getQueueStats(){
+    if (this.buffer && this.isAsync) {
+      return this.buffer.getStats()
+    }
+    return null
   }
 }
 
