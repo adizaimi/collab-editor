@@ -1,0 +1,215 @@
+{
+  "startTime": "2026-03-14T15:45:35.140Z",
+  "endTime": "2026-03-14T15:46:35.214Z",
+  "memorySamples": [
+    {
+      "time": "0.0",
+      "rss": "53.23",
+      "heapTotal": "9.33",
+      "heapUsed": "6.43",
+      "external": "2.18"
+    },
+    {
+      "time": "5.0",
+      "rss": "55.92",
+      "heapTotal": "10.58",
+      "heapUsed": "6.60",
+      "external": "2.20"
+    },
+    {
+      "time": "10.0",
+      "rss": "57.02",
+      "heapTotal": "10.58",
+      "heapUsed": "7.32",
+      "external": "2.23"
+    },
+    {
+      "time": "15.0",
+      "rss": "57.72",
+      "heapTotal": "10.83",
+      "heapUsed": "6.71",
+      "external": "2.21"
+    },
+    {
+      "time": "20.0",
+      "rss": "57.81",
+      "heapTotal": "10.83",
+      "heapUsed": "7.35",
+      "external": "2.24"
+    },
+    {
+      "time": "25.0",
+      "rss": "58.16",
+      "heapTotal": "8.08",
+      "heapUsed": "6.48",
+      "external": "2.20"
+    },
+    {
+      "time": "30.0",
+      "rss": "58.33",
+      "heapTotal": "7.33",
+      "heapUsed": "6.36",
+      "external": "2.20"
+    },
+    {
+      "time": "35.0",
+      "rss": "58.45",
+      "heapTotal": "7.33",
+      "heapUsed": "6.25",
+      "external": "2.20"
+    },
+    {
+      "time": "40.0",
+      "rss": "61.31",
+      "heapTotal": "7.83",
+      "heapUsed": "6.90",
+      "external": "2.23"
+    },
+    {
+      "time": "45.0",
+      "rss": "61.33",
+      "heapTotal": "7.83",
+      "heapUsed": "6.82",
+      "external": "2.22"
+    },
+    {
+      "time": "50.0",
+      "rss": "61.58",
+      "heapTotal": "8.08",
+      "heapUsed": "6.72",
+      "external": "2.22"
+    },
+    {
+      "time": "55.0",
+      "rss": "62.06",
+      "heapTotal": "8.08",
+      "heapUsed": "6.65",
+      "external": "2.22"
+    }
+  ],
+  "dbSizeSamples": [
+    {
+      "time": "0.0",
+      "size": "0.02"
+    },
+    {
+      "time": "5.0",
+      "size": "0.03"
+    },
+    {
+      "time": "10.0",
+      "size": "0.03"
+    },
+    {
+      "time": "15.0",
+      "size": "0.04"
+    },
+    {
+      "time": "20.0",
+      "size": "0.05"
+    },
+    {
+      "time": "25.0",
+      "size": "0.05"
+    },
+    {
+      "time": "30.0",
+      "size": "0.07"
+    },
+    {
+      "time": "35.0",
+      "size": "0.07"
+    },
+    {
+      "time": "40.0",
+      "size": "0.08"
+    },
+    {
+      "time": "45.0",
+      "size": "0.09"
+    },
+    {
+      "time": "50.0",
+      "size": "0.09"
+    },
+    {
+      "time": "55.0",
+      "size": "0.11"
+    }
+  ],
+  "operationCounts": [
+    {
+      "time": "0.0",
+      "operations": 2,
+      "snapshots": 0,
+      "documents": 1
+    },
+    {
+      "time": "5.0",
+      "operations": 43,
+      "snapshots": 0,
+      "documents": 1
+    },
+    {
+      "time": "10.0",
+      "operations": 92,
+      "snapshots": 0,
+      "documents": 1
+    },
+    {
+      "time": "15.0",
+      "operations": 142,
+      "snapshots": 1,
+      "documents": 1
+    },
+    {
+      "time": "20.0",
+      "operations": 192,
+      "snapshots": 1,
+      "documents": 1
+    },
+    {
+      "time": "25.0",
+      "operations": 242,
+      "snapshots": 2,
+      "documents": 1
+    },
+    {
+      "time": "30.0",
+      "operations": 292,
+      "snapshots": 2,
+      "documents": 1
+    },
+    {
+      "time": "35.0",
+      "operations": 342,
+      "snapshots": 3,
+      "documents": 1
+    },
+    {
+      "time": "40.0",
+      "operations": 392,
+      "snapshots": 3,
+      "documents": 1
+    },
+    {
+      "time": "45.0",
+      "operations": 442,
+      "snapshots": 4,
+      "documents": 1
+    },
+    {
+      "time": "50.0",
+      "operations": 492,
+      "snapshots": 4,
+      "documents": 1
+    },
+    {
+      "time": "55.0",
+      "operations": 542,
+      "snapshots": 5,
+      "documents": 1
+    }
+  ],
+  "errors": []
+}

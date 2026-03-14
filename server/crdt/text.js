@@ -23,77 +23,160 @@ class CRDTText {
   }
 
   getText(){
-    let out=""
-    const visit=(id)=>{
+    let out = ""
+    // Use iterative traversal to avoid stack overflow on large documents
+    const stack = [this.root]
+
+    while (stack.length > 0) {
+      const id = stack.pop()
       const node = this.chars.get(id)
-      if(id!==this.root && !node.deleted) out+=node.value
-      for(const c of node.right) visit(c)
+
+      if (id !== this.root && !node.deleted) {
+        out += node.value
+      }
+
+      // Push children in reverse order so they're processed left-to-right
+      for (let i = node.right.length - 1; i >= 0; i--) {
+        stack.push(node.right[i])
+      }
     }
-    visit(this.root)
+
     return out
   }
 
   getVisibleChars(){
     const result = []
-    const visit = (id) => {
+    // Use iterative traversal to avoid stack overflow on large documents
+    const stack = [this.root]
+
+    while (stack.length > 0) {
+      const id = stack.pop()
       const node = this.chars.get(id)
-      if(id !== this.root && !node.deleted) {
+
+      if (id !== this.root && !node.deleted) {
         result.push(node)
       }
-      for(const c of node.right) {
-        visit(c)
+
+      // Push children in reverse order so they're processed left-to-right
+      for (let i = node.right.length - 1; i >= 0; i--) {
+        stack.push(node.right[i])
       }
     }
-    visit(this.root)
+
     return result
   }
 
   getIdAtOffset(offset){
-    let i=-1, result=null
-    const visit=(id)=>{
+    let i = -1
+    let result = null
+    // Use iterative traversal to avoid stack overflow on large documents
+    const stack = [this.root]
+
+    while (stack.length > 0 && result === null) {
+      const id = stack.pop()
       const node = this.chars.get(id)
-      if(id!==this.root && !node.deleted) i++
-      if(i===offset){ result=id; return }
-      for(const c of node.right){ if(!result) visit(c) }
+
+      if (id !== this.root && !node.deleted) {
+        i++
+        if (i === offset) {
+          result = id
+          break
+        }
+      }
+
+      // Push children in reverse order so they're processed left-to-right
+      for (let i = node.right.length - 1; i >= 0; i--) {
+        stack.push(node.right[i])
+      }
     }
-    visit(this.root)
+
     return result || this.root
   }
 
   getOffsetOfId(targetId){
     let offset = 0
-    const visit = (id) => {
-      if(id === targetId) return true
-      const node = this.chars.get(id)
-      if(id !== this.root && !node.deleted) offset++
-      for(const c of node.right) {
-        if(visit(c)) return true
+    let found = false
+    // Use iterative traversal to avoid stack overflow on large documents
+    const stack = [this.root]
+
+    while (stack.length > 0 && !found) {
+      const id = stack.pop()
+
+      if (id === targetId) {
+        found = true
+        break
       }
-      return false
+
+      const node = this.chars.get(id)
+      if (id !== this.root && !node.deleted) {
+        offset++
+      }
+
+      // Push children in reverse order so they're processed left-to-right
+      for (let i = node.right.length - 1; i >= 0; i--) {
+        stack.push(node.right[i])
+      }
     }
-    visit(this.root)
+
     return offset
   }
 
   findIdByValueAtOffset(value, targetOffset){
     let currentOffset = -1
     let result = null
-    const visit = (id) => {
+    // Use iterative traversal to avoid stack overflow on large documents
+    const stack = [this.root]
+
+    while (stack.length > 0 && result === null) {
+      const id = stack.pop()
       const node = this.chars.get(id)
-      if(id !== this.root && !node.deleted) {
+
+      if (id !== this.root && !node.deleted) {
         currentOffset++
-        if(currentOffset === targetOffset && node.value === value) {
+        if (currentOffset === targetOffset && node.value === value) {
           result = id
-          return true
+          break
         }
       }
-      for(const c of node.right) {
-        if(visit(c)) return true
+
+      // Push children in reverse order so they're processed left-to-right
+      for (let i = node.right.length - 1; i >= 0; i--) {
+        stack.push(node.right[i])
       }
-      return false
     }
-    visit(this.root)
+
     return result
+  }
+
+  /**
+   * Compact CRDT by removing old tombstones and rebuilding structure
+   * This prevents unbounded memory growth from deleted characters
+   */
+  compact() {
+    const text = this.getText()
+    const oldSize = this.chars.size
+
+    // Rebuild CRDT from current text
+    this.chars.clear()
+    this.root = 'ROOT'
+    this.chars.set(this.root, {id: this.root, value: "", left: null, right: [], deleted: false})
+
+    let afterId = 'ROOT'
+    for (let i = 0; i < text.length; i++) {
+      const id = `compact:${i}:${Date.now()}`
+      this.insert(text[i], afterId, id)
+      afterId = id
+    }
+
+    const newSize = this.chars.size
+    const removed = oldSize - newSize
+
+    return {
+      oldSize,
+      newSize,
+      removed,
+      compressionRatio: oldSize > 0 ? (removed / oldSize * 100).toFixed(1) : 0
+    }
   }
 
   /**

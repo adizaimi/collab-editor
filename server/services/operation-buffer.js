@@ -181,6 +181,24 @@ class OperationBuffer {
   flush(docId) {
     this._flushBuffer(docId)
   }
+
+  /**
+   * Clean up inactive document buffers (memory leak prevention)
+   */
+  cleanupInactive() {
+    let cleanedCount = 0
+    for (const [docId, buffer] of this.buffers.entries()) {
+      // If buffer is empty and timer is cleared, remove it
+      if (buffer.ops.length === 0 && buffer.timer === null) {
+        this.buffers.delete(docId)
+        cleanedCount++
+      }
+    }
+
+    if (cleanedCount > 0) {
+      console.log(`[Buffer Cleanup] Removed ${cleanedCount} inactive document buffers`)
+    }
+  }
 }
 
 module.exports = OperationBuffer

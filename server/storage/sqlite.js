@@ -43,11 +43,11 @@ class SQLiteStorage {
     return this.db.prepare(`SELECT * FROM operations WHERE doc_id=? ORDER BY id`).all(docId)
   }
 
-  saveSnapshot(docId, content){
+  saveSnapshot(docId, content, timestamp = Date.now()){
     this.db.prepare(`
       INSERT INTO snapshots (doc_id, content, created_at)
       VALUES (?,?,?)
-    `).run(docId, content, Date.now())
+    `).run(docId, content, timestamp)
   }
 
   loadLatestSnapshot(docId){

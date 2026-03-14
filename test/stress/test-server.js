@@ -1,11 +1,26 @@
+/**
+ * Test server wrapper for stress tests
+ * Allows custom port and database path via environment variables
+ */
+
 const express = require("express")
 const http = require("http")
 const WebSocket = require("ws")
-const SQLiteStorage = require("./storage/sqlite")
-const DocumentService = require("./services/document")
+const SQLiteStorage = require("../../server/storage/sqlite")
+const DocumentService = require("../../server/services/document")
+
+// Configuration from environment
+const PORT = process.env.TEST_PORT || 3000
+const DB_PATH = process.env.TEST_DB_PATH || 'editor.db'
 
 const storage = new SQLiteStorage()
+// Override database path for testing
+if (DB_PATH !== 'editor.db') {
+  const Database = require('better-sqlite3')
+  storage.db = new Database(DB_PATH)
+}
 storage.init()
+
 const docs = new DocumentService(storage, true) // Enable batching
 
 // Snapshot configuration
@@ -160,4 +175,6 @@ process.on('SIGTERM', () => {
   process.exit(0)
 })
 
-server.listen(3000,()=>console.log("Server running at http://localhost:3000/?doc=test"))
+server.listen(PORT, () => {
+  console.log(`Server running at http://localhost:${PORT}/?doc=test`)
+})

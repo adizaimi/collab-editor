@@ -6,26 +6,32 @@ class DocumentService {
     this.storage = storage
     this.docs = new Map()
     this.buffer = enableBatching ? new OperationBuffer(storage) : null
+    this.operationCounts = new Map() // Track op count in memory to avoid DB queries
   }
 
   loadDocument(docId){
     if(this.docs.has(docId)) return this.docs.get(docId)
-    let crdt
+    let crdt = new CRDTText()
 
     // Check for snapshot first
     const snapshot = this.storage.loadLatestSnapshot(docId)
     if (snapshot) {
-      // Deserialize CRDT from snapshot
-      crdt = CRDTText.deserialize(snapshot.content)
-
-      // Load and apply operations since snapshot
-      const recentOps = this.storage.loadOperationsSinceSnapshot(docId, snapshot.created_at)
-      for (const r of recentOps) {
+      // With text-only snapshots, we need ALL operations to rebuild correctly
+      // Don't use snapshot text - it's just for validation/display
+      // Build CRDT from all remaining operations
+      const ops = this.storage.loadOperations(docId)
+      for (const r of ops) {
         this._applyStoredOperation(crdt, r)
       }
+
+      // Validate that we got the right result
+      const text = crdt.getText()
+      if (ops.length === 0 && snapshot.content !== text) {
+        // No operations but snapshot doesn't match - rebuild from snapshot text
+        crdt = this._buildCRDTFromText(snapshot.content)
+      }
     } else {
-      // Create new CRDT and load all operations
-      crdt = new CRDTText()
+      // No snapshot: load all operations
       const ops = this.storage.loadOperations(docId)
       for (const r of ops) {
         this._applyStoredOperation(crdt, r)
@@ -33,6 +39,22 @@ class DocumentService {
     }
 
     this.docs.set(docId, crdt)
+    return crdt
+  }
+
+  /**
+   * Build CRDT from plain text (new snapshot format)
+   */
+  _buildCRDTFromText(text) {
+    const crdt = new CRDTText()
+    let afterId = 'ROOT'
+
+    for (let i = 0; i < text.length; i++) {
+      const id = `snapshot:${i}:${Date.now()}`
+      crdt.insert(text[i], afterId, id)
+      afterId = id
+    }
+
     return crdt
   }
 
@@ -63,32 +85,14 @@ class DocumentService {
     }
   }
 
-  /**
-   * Expand snapshot content into individual insert operations
-   */
-  _expandSnapshotToOperations(content) {
-    const ops = []
-    let afterId = 'ROOT'
-
-    for (let i = 0; i < content.length; i++) {
-      const id = `snapshot:${i}`
-      ops.push({
-        type: 'insert',
-        id: id,
-        value: content[i],
-        after: afterId
-      })
-      afterId = id
-    }
-
-    return ops
-  }
-
   applyOperation(docId, op){
     const doc = this.loadDocument(docId)
     if(op.type==="insert") doc.insert(op.value, op.after, op.id)
     if(op.type==="delete") doc.delete(op.id)
     this.storage.saveOperation(docId, op)
+
+    // Increment operation counter (for snapshot threshold tracking)
+    this.operationCounts.set(docId, (this.operationCounts.get(docId) || 0) + 1)
   }
 
   /**
@@ -125,6 +129,9 @@ class DocumentService {
       this.storage.saveOperation(docId, op)
     }
 
+    // Increment operation counter
+    this.operationCounts.set(docId, (this.operationCounts.get(docId) || 0) + 1)
+
     return actualOffset
   }
 
@@ -147,24 +154,32 @@ class DocumentService {
       this.buffer.flush(docId)
     }
 
-    // Serialize full CRDT state (not just text)
-    const serialized = doc.serialize()
+    // NEW: Store text only (not full CRDT) for massive space savings
+    const text = doc.getText()
+    const timestamp = Date.now()
 
-    // Save snapshot
-    this.storage.saveSnapshot(docId, serialized)
+    // Save new snapshot with explicit timestamp
+    this.storage.saveSnapshot(docId, text, timestamp)
 
-    // Delete operations older than or equal to this snapshot
-    const snapshot = this.storage.loadLatestSnapshot(docId)
-    if (snapshot) {
-      this.storage.deleteOldOperations(docId, snapshot.created_at)
-    }
+    // TODO: Implement smart operation archival
+    // For now, keep ALL operations to maintain CRDT integrity
+    // In production, we'd want to:
+    // 1. Keep operations from last 24 hours
+    // 2. Or keep last N operations
+    // 3. Periodically compact CRDT to remove old tombstones
+
+    // Reset operation counter
+    this.operationCounts.set(docId, 0)
+
+    const opCount = this.storage.getOperationCount(docId)
+    console.log(`[Snapshot] Created for ${docId}: ${text.length} chars, ${opCount} ops remaining`)
   }
 
   /**
    * Check if document needs snapshot (every N operations)
    */
   shouldCreateSnapshot(docId, operationThreshold = 100){
-    const opCount = this.storage.getOperationCount(docId)
+    const opCount = this.operationCounts.get(docId) || 0
     return opCount >= operationThreshold
   }
 
