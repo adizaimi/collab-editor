@@ -80,6 +80,13 @@ class SQLiteStorage {
     `).get(docId)
     return result.count
   }
+
+  close(){
+    if (this.db) {
+      this.db.close()
+      console.log('[SQLite] Database connection closed')
+    }
+  }
 }
 
 module.exports = SQLiteStorage

@@ -33,10 +33,10 @@ function assertEquals(actual, expected, message) {
 let testCount = 0
 let passCount = 0
 
-function runTest(name, testFn) {
+async function runTest(name, testFn) {
   testCount++
   try {
-    testFn()
+    await testFn()
     passCount++
     console.log(`  ✅ PASSED: ${name}`)
   } catch (err) {
@@ -49,6 +49,9 @@ console.log("=".repeat(60))
 console.log("UNIT TESTS: Snapshot System")
 console.log("=".repeat(60))
 
+// Main async test runner
+async function runAllTests() {
+
 // Initialize storage
 const storage = new SQLiteStorage()
 // Override database path for testing
@@ -57,7 +60,7 @@ storage.init()
 
 // Test 1: Save and load snapshot
 console.log("\n[Test 1] Save and load snapshot")
-runTest("snapshot saves and loads correctly", () => {
+await await runTest("snapshot saves and loads correctly", () => {
   storage.saveSnapshot('doc1', 'Hello World')
 
   const snapshot = storage.loadLatestSnapshot('doc1')
@@ -69,7 +72,7 @@ runTest("snapshot saves and loads correctly", () => {
 
 // Test 2: Latest snapshot is returned
 console.log("\n[Test 2] Latest snapshot is returned when multiple exist")
-runTest("returns latest snapshot", () => {
+await runTest("returns latest snapshot", () => {
   // Create multiple snapshots
   storage.saveSnapshot('doc2', 'Version 1')
   // Wait a bit to ensure different timestamps
@@ -83,7 +86,7 @@ runTest("returns latest snapshot", () => {
 
 // Test 3: Load operations since snapshot
 console.log("\n[Test 3] Load operations since snapshot timestamp")
-runTest("loads only operations after snapshot", () => {
+await runTest("loads only operations after snapshot", () => {
   // Clear old data
   storage.db.exec("DELETE FROM operations WHERE doc_id = 'doc3'")
   storage.db.exec("DELETE FROM snapshots WHERE doc_id = 'doc3'")
@@ -117,7 +120,7 @@ runTest("loads only operations after snapshot", () => {
 
 // Test 4: Delete old operations
 console.log("\n[Test 4] Delete operations older than timestamp")
-runTest("deletes old operations", () => {
+await runTest("deletes old operations", () => {
   // Clear old data
   storage.db.exec("DELETE FROM operations WHERE doc_id = 'doc4'")
 
@@ -144,7 +147,7 @@ runTest("deletes old operations", () => {
 
 // Test 5: Operation count
 console.log("\n[Test 5] Get operation count for document")
-runTest("counts operations correctly", () => {
+await runTest("counts operations correctly", () => {
   // Clear old data
   storage.db.exec("DELETE FROM operations WHERE doc_id = 'doc5'")
 
@@ -158,7 +161,7 @@ runTest("counts operations correctly", () => {
 
 // Test 6: DocumentService creates snapshot
 console.log("\n[Test 6] DocumentService creates snapshot and archives operations")
-runTest("document service creates snapshot", () => {
+await runTest("document service creates snapshot", async () => {
   // Use a separate storage for this test
   const testStorage = new SQLiteStorage()
   testStorage.db = require('better-sqlite3')(':memory:')
@@ -174,8 +177,8 @@ runTest("document service creates snapshot", () => {
   const now2 = Date.now()
   while (Date.now() === now2) { /* wait */ }
 
-  // Create snapshot
-  docService.createSnapshot('doc6')
+  // Create snapshot (now async)
+  await docService.createSnapshot('doc6')
 
   // Verify snapshot exists
   const snapshot = testStorage.loadLatestSnapshot('doc6')
@@ -192,7 +195,7 @@ runTest("document service creates snapshot", () => {
 
 // Test 7: Load document from snapshot
 console.log("\n[Test 7] DocumentService loads document from snapshot")
-runTest("loads document from snapshot", () => {
+await runTest("loads document from snapshot", async () => {
   // Use a separate storage for this test
   const testStorage = new SQLiteStorage()
   testStorage.db = require('better-sqlite3')(':memory:')
@@ -209,8 +212,8 @@ runTest("loads document from snapshot", () => {
   let now = Date.now()
   while (Date.now() - now < 5) { /* wait 5ms */ }
 
-  // Create snapshot
-  docService1.createSnapshot('doc7')
+  // Create snapshot (now async)
+  await docService1.createSnapshot('doc7')
   const snapshot = testStorage.loadLatestSnapshot('doc7')
 
   // Wait to ensure new operation has later timestamp than snapshot
@@ -235,7 +238,7 @@ runTest("loads document from snapshot", () => {
 
 // Test 8: shouldCreateSnapshot threshold
 console.log("\n[Test 8] shouldCreateSnapshot detects threshold")
-runTest("snapshot threshold detection", () => {
+await runTest("snapshot threshold detection", () => {
   const testStorage = new SQLiteStorage()
   testStorage.db = require('better-sqlite3')(':memory:')
   testStorage.init()
@@ -269,7 +272,7 @@ runTest("snapshot threshold detection", () => {
 
 // Test 9: Batched operations expand correctly on load
 console.log("\n[Test 9] Batched operations expand correctly when loading")
-runTest("batched operations expand on load", () => {
+await runTest("batched operations expand on load", () => {
   const testStorage = new SQLiteStorage()
   testStorage.db = require('better-sqlite3')(':memory:')
   testStorage.init()
@@ -289,7 +292,7 @@ runTest("batched operations expand on load", () => {
 
 // Test 10: Batched deletes expand correctly
 console.log("\n[Test 10] Batched delete operations expand correctly when loading")
-runTest("batched deletes expand on load", () => {
+await runTest("batched deletes expand on load", () => {
   const testStorage = new SQLiteStorage()
   testStorage.db = require('better-sqlite3')(':memory:')
   testStorage.init()
@@ -333,3 +336,11 @@ if (passCount === testCount) {
   console.log(`\n❌ ${testCount - passCount} test(s) failed\n`)
   process.exit(1)
 }
+
+} // End of runAllTests
+
+// Run all tests
+runAllTests().catch(err => {
+  console.error('Test runner error:', err)
+  process.exit(1)
+})

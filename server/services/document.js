@@ -11,7 +11,7 @@ class DocumentService {
 
     const {
       enableBatching = true,
-      useAsyncQueue = false,  // New: use async operation queue
+      useAsyncQueue = true,  // Default: use async operation queue for better performance
       queueOptions = {}
     } = options
 
@@ -176,12 +176,16 @@ class DocumentService {
   /**
    * Create snapshot of document and archive old operations
    */
-  createSnapshot(docId){
+  async createSnapshot(docId){
     const doc = this.loadDocument(docId)
 
     // Flush buffer first
     if (this.buffer) {
-      this.buffer.flush(docId)
+      if (this.isAsync) {
+        await this.buffer.flush(docId)
+      } else {
+        this.buffer.flush(docId)
+      }
     }
 
     // NEW: Store text only (not full CRDT) for massive space savings

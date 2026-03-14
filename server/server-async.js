@@ -56,7 +56,22 @@ wss.on("connection",(ws,req)=>{
   ws.send(JSON.stringify({type:"init", text:docs.getText(docId)}))
 
   ws.on("message", msg=>{
-    const data = JSON.parse(msg)
+    let data
+    try {
+      data = JSON.parse(msg)
+    } catch (error) {
+      console.error('[WebSocket] Invalid JSON:', error.message)
+      ws.send(JSON.stringify({type: 'error', message: 'Invalid message format'}))
+      return
+    }
+
+    // Validate message structure
+    if (!data.type || !data.clientId) {
+      console.error('[WebSocket] Missing required fields:', data)
+      ws.send(JSON.stringify({type: 'error', message: 'Missing required fields'}))
+      return
+    }
+
     const crdt = docs.getCRDT(docId)
     let op = null
     let broadcastOp = null
@@ -178,7 +193,8 @@ process.on('SIGINT', async () => {
   await docs.flushBuffers()
   const finalStats = docs.getQueueStats()
   console.log('[Shutdown] Final queue stats:', finalStats)
-  console.log('[Shutdown] Queues flushed. Exiting.')
+  storage.close()
+  console.log('[Shutdown] Shutdown complete. Exiting.')
   process.exit(0)
 })
 
@@ -187,7 +203,8 @@ process.on('SIGTERM', async () => {
   await docs.flushBuffers()
   const finalStats = docs.getQueueStats()
   console.log('[Shutdown] Final queue stats:', finalStats)
-  console.log('[Shutdown] Queues flushed. Exiting.')
+  storage.close()
+  console.log('[Shutdown] Shutdown complete. Exiting.')
   process.exit(0)
 })
 

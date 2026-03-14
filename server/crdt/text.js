@@ -36,8 +36,8 @@ class CRDTText {
       }
 
       // Push children in reverse order so they're processed left-to-right
-      for (let i = node.right.length - 1; i >= 0; i--) {
-        stack.push(node.right[i])
+      for (let j = node.right.length - 1; j >= 0; j--) {
+        stack.push(node.right[j])
       }
     }
 
@@ -58,8 +58,8 @@ class CRDTText {
       }
 
       // Push children in reverse order so they're processed left-to-right
-      for (let i = node.right.length - 1; i >= 0; i--) {
-        stack.push(node.right[i])
+      for (let j = node.right.length - 1; j >= 0; j--) {
+        stack.push(node.right[j])
       }
     }
 
@@ -85,8 +85,8 @@ class CRDTText {
       }
 
       // Push children in reverse order so they're processed left-to-right
-      for (let i = node.right.length - 1; i >= 0; i--) {
-        stack.push(node.right[i])
+      for (let j = node.right.length - 1; j >= 0; j--) {
+        stack.push(node.right[j])
       }
     }
 
@@ -113,8 +113,8 @@ class CRDTText {
       }
 
       // Push children in reverse order so they're processed left-to-right
-      for (let i = node.right.length - 1; i >= 0; i--) {
-        stack.push(node.right[i])
+      for (let j = node.right.length - 1; j >= 0; j--) {
+        stack.push(node.right[j])
       }
     }
 
@@ -140,8 +140,8 @@ class CRDTText {
       }
 
       // Push children in reverse order so they're processed left-to-right
-      for (let i = node.right.length - 1; i >= 0; i--) {
-        stack.push(node.right[i])
+      for (let j = node.right.length - 1; j >= 0; j--) {
+        stack.push(node.right[j])
       }
     }
 

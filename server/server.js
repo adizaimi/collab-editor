@@ -46,7 +46,22 @@ wss.on("connection",(ws,req)=>{
   ws.send(JSON.stringify({type:"init", text:docs.getText(docId)}))
 
   ws.on("message", msg=>{
-    const data = JSON.parse(msg)
+    let data
+    try {
+      data = JSON.parse(msg)
+    } catch (error) {
+      console.error('[WebSocket] Invalid JSON:', error.message)
+      ws.send(JSON.stringify({type: 'error', message: 'Invalid message format'}))
+      return
+    }
+
+    // Validate message structure
+    if (!data.type || !data.clientId) {
+      console.error('[WebSocket] Missing required fields:', data)
+      ws.send(JSON.stringify({type: 'error', message: 'Missing required fields'}))
+      return
+    }
+
     const crdt = docs.getCRDT(docId)
     let op = null
     let broadcastOp = null
@@ -107,9 +122,9 @@ wss.on("connection",(ws,req)=>{
 })
 
 // Helper function to create snapshot
-function createSnapshot(docId) {
+async function createSnapshot(docId) {
   try {
-    docs.createSnapshot(docId)
+    await docs.createSnapshot(docId)
     console.log(`[Snapshot] Created snapshot for document: ${docId}`)
   } catch (err) {
     console.error(`[Snapshot] Error creating snapshot for ${docId}:`, err)
@@ -117,13 +132,13 @@ function createSnapshot(docId) {
 }
 
 // Helper function to create snapshot on idle
-function createIdleSnapshot(docId) {
+async function createIdleSnapshot(docId) {
   // Flush buffer and create snapshot
-  docs.flushBuffer(docId)
+  await docs.flushBuffer(docId)
   console.log(`[Snapshot] Flushed buffer for document: ${docId} (idle)`)
 
   // Optionally create snapshot on idle (commented out to avoid too many snapshots)
-  // createSnapshot(docId)
+  // await createSnapshot(docId)
 }
 
 // Memory cleanup - remove inactive document timers every hour
@@ -158,14 +173,16 @@ setInterval(() => {
 process.on('SIGINT', async () => {
   console.log('\n[Shutdown] Flushing all buffers before exit...')
   await docs.flushBuffers()
-  console.log('[Shutdown] Buffers flushed. Exiting.')
+  storage.close()
+  console.log('[Shutdown] Shutdown complete. Exiting.')
   process.exit(0)
 })
 
 process.on('SIGTERM', async () => {
   console.log('\n[Shutdown] Flushing all buffers before exit...')
   await docs.flushBuffers()
-  console.log('[Shutdown] Buffers flushed. Exiting.')
+  storage.close()
+  console.log('[Shutdown] Shutdown complete. Exiting.')
   process.exit(0)
 })
 
