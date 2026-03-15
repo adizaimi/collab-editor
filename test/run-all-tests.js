@@ -70,6 +70,11 @@ const testSuites = [
     name: "Presence, Colors & Cursor E2E Tests",
     path: path.join(__dirname, "e2e/presence-cursor.test.js"),
     type: "e2e"
+  },
+  {
+    name: "Documents API E2E Tests",
+    path: path.join(__dirname, "e2e/documents-api.test.js"),
+    type: "e2e"
   }
 ]
 

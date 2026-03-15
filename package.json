@@ -24,6 +24,7 @@
     "test:unit:large": "node test/unit/large-document.test.js",
     "test:e2e": "node test/e2e/server-client.test.js",
     "test:e2e:format": "node test/e2e/format-e2e.test.js",
+    "test:e2e:docs-api": "node test/e2e/documents-api.test.js",
     "test:stress:concurrent": "node test/stress/concurrent-users.test.js",
     "test:stress:memory": "node test/stress/memory-stress.test.js",
     "test:stress:multidoc": "node test/stress/multi-document-concurrent.test.js",
