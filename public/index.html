@@ -147,18 +147,25 @@ function sendOp(data) {
 // element containers (spans, bullet divs).
 
 function domOffsetToFlat(targetNode, targetOffset) {
+  // All lines are wrapped in <div> elements (direct children of editor).
+  // Each div after the first represents a \n preceding that line's content.
+  // Inside divs: text nodes hold chars, <br> is empty-line placeholder (0 chars).
   let count = 0
   let found = false
 
   function walk(node) {
     if (found) return
 
-    // Did we reach the target?
     if (node === targetNode) {
       if (node.nodeType === Node.TEXT_NODE) {
         count += targetOffset
       } else {
-        // Element node: offset = number of child nodes to count through
+        // If target is a line div (after the first), count the implicit newline
+        if (node.nodeName === 'DIV' && node.parentNode === editor) {
+          const idx = Array.from(editor.childNodes).indexOf(node)
+          if (idx > 0) count += 1
+        }
+        // Count children up to targetOffset
         for (let i = 0; i < targetOffset && i < node.childNodes.length; i++) {
           countAll(node.childNodes[i])
         }
@@ -170,8 +177,13 @@ function domOffsetToFlat(targetNode, targetOffset) {
     if (node.nodeType === Node.TEXT_NODE) {
       count += node.textContent.length
     } else if (node.nodeName === 'BR') {
-      count += 1
+      // BR inside a div is just an empty-line placeholder, counts as 0
     } else {
+      // For div children of editor (after the first), count a newline
+      if (node.nodeName === 'DIV' && node.parentNode === editor) {
+        const idx = Array.from(editor.childNodes).indexOf(node)
+        if (idx > 0) count += 1  // newline before this line
+      }
       for (let i = 0; i < node.childNodes.length; i++) {
         if (found) return
         walk(node.childNodes[i])
@@ -183,8 +195,12 @@ function domOffsetToFlat(targetNode, targetOffset) {
     if (node.nodeType === Node.TEXT_NODE) {
       count += node.textContent.length
     } else if (node.nodeName === 'BR') {
-      count += 1
+      // empty-line placeholder, 0 chars
     } else {
+      if (node.nodeName === 'DIV' && node.parentNode === editor) {
+        const idx = Array.from(editor.childNodes).indexOf(node)
+        if (idx > 0) count += 1
+      }
       for (let i = 0; i < node.childNodes.length; i++) {
         countAll(node.childNodes[i])
       }
@@ -196,40 +212,55 @@ function domOffsetToFlat(targetNode, targetOffset) {
 }
 
 function flatToDomOffset(flatOffset) {
+  // All lines are in <div> children of editor.
+  // Each div after the first consumes 1 for the implicit newline.
+  // Inside divs: text nodes hold chars, <br> is empty-line placeholder (0 chars).
   let remaining = flatOffset
+  const divs = editor.childNodes
 
-  function walk(node) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      if (remaining <= node.textContent.length) {
-        return { node: node, offset: remaining }
-      }
-      remaining -= node.textContent.length
-      return null
-    }
-
-    if (node.nodeName === 'BR') {
+  for (let d = 0; d < divs.length; d++) {
+    const div = divs[d]
+    // Newline before this line (for divs after the first)
+    if (d > 0) {
       if (remaining === 0) {
-        // Position right before this BR in its parent
-        const parent = node.parentNode
-        const idx = Array.from(parent.childNodes).indexOf(node)
-        return { node: parent, offset: idx }
+        // Position at the end of the previous div (after its content = after the \n)
+        return { node: editor, offset: d }
       }
-      remaining -= 1
-      return null
+      remaining -= 1  // consume the implicit newline
     }
 
-    for (let i = 0; i < node.childNodes.length; i++) {
-      const result = walk(node.childNodes[i])
-      if (result) return result
-    }
-    return null
+    // Walk inside this div to find the position
+    const result = walkInDiv(div, remaining)
+    if (result.found) return result.pos
+    remaining = result.remaining
   }
 
-  const result = walk(editor)
-  if (result) return result
-
-  // Past end — position at end of editor
+  // Past end
   return { node: editor, offset: editor.childNodes.length }
+}
+
+function walkInDiv(container, remaining) {
+  for (let i = 0; i < container.childNodes.length; i++) {
+    const node = container.childNodes[i]
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (remaining <= node.textContent.length) {
+        return { found: true, pos: { node: node, offset: remaining } }
+      }
+      remaining -= node.textContent.length
+    } else if (node.nodeName === 'BR') {
+      // Empty-line placeholder — if remaining is 0, position before the BR
+      if (remaining === 0) {
+        return { found: true, pos: { node: container, offset: i } }
+      }
+      // BR inside a div is a placeholder, no chars to consume
+    } else {
+      // Nested element (span, etc.) — recurse
+      const result = walkInDiv(node, remaining)
+      if (result.found) return result
+      remaining = result.remaining
+    }
+  }
+  return { found: false, remaining }
 }
 
 function getSelectionOffsets() {
@@ -262,6 +293,8 @@ function setSelectionOffsets(start, end) {
 
 function renderEditor() {
   // Split into lines; a newline with block:"bullet" makes the NEXT line a bullet.
+  // ALL lines are wrapped in <div> elements for consistent offset mapping.
+  // Newlines are implicit from div boundaries (no <br> between lines).
   const lines = []
   let currentLine = { chars: [], isBullet: false }
 
@@ -294,19 +327,12 @@ function renderEditor() {
       lineHtml += wrapRun(run, ch.attrs)
     }
 
-    if (line.isBullet) {
-      html += '<div class="bullet-line">' + (lineHtml || '<br>') + '</div>'
-    } else {
-      html += lineHtml
-    }
-
-    if (lineIdx < lines.length - 1 && !line.isBullet) {
-      html += '<br>'
-    }
+    const cls = line.isBullet ? ' class="bullet-line"' : ''
+    html += '<div' + cls + '>' + (lineHtml || '<br>') + '</div>'
   }
 
   if (formattedChars.length === 0) {
-    html = '<br>'
+    html = '<div><br></div>'
   }
 
   editor.innerHTML = html
@@ -729,25 +755,37 @@ function applyRemoteOp(op) {
 const BLOCK_TAGS = new Set(['DIV', 'P', 'BLOCKQUOTE', 'LI', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'])
 
 function getEditorText() {
+  // All lines are in <div> children of editor.
+  // Each div after the first contributes a \n before its content.
+  // <br> inside divs is just an empty-line placeholder (no text).
   let text = ''
-  function walk(node) {
-    for (const child of node.childNodes) {
-      if (child.nodeType === Node.TEXT_NODE) {
-        text += child.textContent
-      } else if (child.nodeName === 'BR') {
-        text += '\n'
-      } else if (child.nodeType === Node.ELEMENT_NODE) {
-        // Block-level elements (divs from Enter, bullet divs, etc.)
-        // contribute a newline before their content unless at start
-        const isBlock = BLOCK_TAGS.has(child.nodeName)
-        if (isBlock && text.length > 0 && !text.endsWith('\n')) {
-          text += '\n'
-        }
-        walk(child)
-      }
+  let blockCount = 0
+  for (const child of editor.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      // Browser quirk: text directly in editor (not in a div)
+      text += child.textContent
+    } else if (child.nodeName === 'BR') {
+      text += '\n'
+    } else if (child.nodeType === Node.ELEMENT_NODE) {
+      if (blockCount > 0) text += '\n'
+      text += getTextFromNode(child)
+      blockCount++
     }
   }
-  walk(editor)
+  return text
+}
+
+function getTextFromNode(node) {
+  let text = ''
+  for (const child of node.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      text += child.textContent
+    } else if (child.nodeName === 'BR') {
+      // Empty-line placeholder inside a div, no text
+    } else if (child.nodeType === Node.ELEMENT_NODE) {
+      text += getTextFromNode(child)
+    }
+  }
   return text
 }
 

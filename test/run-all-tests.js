@@ -57,6 +57,11 @@ const testSuites = [
     type: "unit"
   },
   {
+    name: "UI DOM Unit Tests",
+    path: path.join(__dirname, "unit/ui-dom.test.js"),
+    type: "unit"
+  },
+  {
     name: "Server-Client E2E Tests",
     path: path.join(__dirname, "e2e/server-client.test.js"),
     type: "e2e"

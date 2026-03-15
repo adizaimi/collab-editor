@@ -4,7 +4,7 @@
   "main": "server/server.js",
   "type": "commonjs",
   "dependencies": {
-    "better-sqlite3": "^9.0.0",
+    "better-sqlite3": "^12.8.0",
     "express": "^4.19.0",
     "ws": "^8.16.0"
   },
@@ -20,6 +20,7 @@
     "test:unit:snapshot": "node test/unit/snapshot.test.js",
     "test:unit:formatting": "node test/unit/crdt-formatting.test.js",
     "test:unit:format-ops": "node test/unit/format-operations.test.js",
+    "test:unit:ui-dom": "node test/unit/ui-dom.test.js",
     "test:unit:large": "node test/unit/large-document.test.js",
     "test:e2e": "node test/e2e/server-client.test.js",
     "test:e2e:format": "node test/e2e/format-e2e.test.js",
@@ -37,5 +38,8 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": ""
+  "description": "",
+  "devDependencies": {
+    "jsdom": "^28.1.0"
+  }
 }
