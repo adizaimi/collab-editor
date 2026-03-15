@@ -2,14 +2,14 @@ class CRDTText {
   constructor() {
     this.root = "ROOT"
     this.chars = new Map()
-    this.chars.set(this.root, {id:this.root, value:"", left:null, right:[], deleted:false})
+    this.chars.set(this.root, {id:this.root, value:"", left:null, right:[], deleted:false, attrs:{}})
   }
 
-  insert(value, afterId, id){
+  insert(value, afterId, id, attrs = null){
     if(this.chars.has(id)) return
     const left = this.chars.get(afterId)
     if(!left) return
-    const char = {id, value, left:afterId, right:[], deleted:false}
+    const char = {id, value, left:afterId, right:[], deleted:false, attrs: attrs || {}}
     this.chars.set(id,char)
 
     // Insert at the beginning of right array (most recent insertion wins position)
@@ -149,22 +149,67 @@ class CRDTText {
   }
 
   /**
+   * Format a character by setting attributes (bold, italic, block type, etc.)
+   * @param {string} charId - ID of the character to format
+   * @param {object} attrs - Attributes to set (e.g. {bold: true, italic: true})
+   * @returns {boolean} - Whether the format was applied
+   */
+  format(charId, attrs){
+    const node = this.chars.get(charId)
+    if(!node || node.deleted) return false
+    if(!node.attrs) node.attrs = {}
+    for(const [key, value] of Object.entries(attrs)){
+      if(value === null || value === false){
+        delete node.attrs[key]
+      } else {
+        node.attrs[key] = value
+      }
+    }
+    return true
+  }
+
+  /**
+   * Get visible characters with their formatting attributes
+   * Returns array of {id, value, attrs} for rendering
+   */
+  getFormattedChars(){
+    const result = []
+    const stack = [this.root]
+
+    while (stack.length > 0) {
+      const id = stack.pop()
+      const node = this.chars.get(id)
+
+      if (id !== this.root && !node.deleted) {
+        result.push({id: node.id, value: node.value, attrs: node.attrs || {}})
+      }
+
+      for (let j = node.right.length - 1; j >= 0; j--) {
+        stack.push(node.right[j])
+      }
+    }
+
+    return result
+  }
+
+  /**
    * Compact CRDT by removing old tombstones and rebuilding structure
    * This prevents unbounded memory growth from deleted characters
    */
   compact() {
-    const text = this.getText()
+    const formattedChars = this.getFormattedChars()
     const oldSize = this.chars.size
 
-    // Rebuild CRDT from current text
+    // Rebuild CRDT from current visible chars, preserving attrs
     this.chars.clear()
     this.root = 'ROOT'
-    this.chars.set(this.root, {id: this.root, value: "", left: null, right: [], deleted: false})
+    this.chars.set(this.root, {id: this.root, value: "", left: null, right: [], deleted: false, attrs: {}})
 
     let afterId = 'ROOT'
-    for (let i = 0; i < text.length; i++) {
+    for (let i = 0; i < formattedChars.length; i++) {
       const id = `compact:${i}:${Date.now()}`
-      this.insert(text[i], afterId, id)
+      const attrs = Object.keys(formattedChars[i].attrs).length > 0 ? formattedChars[i].attrs : null
+      this.insert(formattedChars[i].value, afterId, id, attrs)
       afterId = id
     }
 
@@ -183,13 +228,20 @@ class CRDTText {
    * Serialize CRDT state to JSON (for snapshots)
    */
   serialize() {
-    const chars = Array.from(this.chars.entries()).map(([id, node]) => ({
-      id,
-      value: node.value,
-      left: node.left,
-      right: node.right,
-      deleted: node.deleted
-    }))
+    const chars = Array.from(this.chars.entries()).map(([id, node]) => {
+      const entry = {
+        id,
+        value: node.value,
+        left: node.left,
+        right: node.right,
+        deleted: node.deleted
+      }
+      // Only include attrs if non-empty to keep snapshots compact
+      if (node.attrs && Object.keys(node.attrs).length > 0) {
+        entry.attrs = node.attrs
+      }
+      return entry
+    })
     return JSON.stringify({ root: this.root, chars })
   }
 
@@ -208,7 +260,8 @@ class CRDTText {
         value: node.value,
         left: node.left,
         right: node.right,
-        deleted: node.deleted
+        deleted: node.deleted,
+        attrs: node.attrs || {}
       })
     }
 
