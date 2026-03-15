@@ -352,6 +352,75 @@ runTest("format() with empty attrs object is a no-op", () => {
 })
 
 // ============================================================
+// Block formatting (bullet) tests
+// ============================================================
+
+runTest("Block attr on newline marks line as bullet", () => {
+  const crdt = new CRDTText()
+  crdt.insert("a", "ROOT", "c0")
+  crdt.insert("\n", "c0", "nl1")
+  crdt.insert("b", "nl1", "c1")
+
+  crdt.format("nl1", { block: "bullet" })
+
+  const chars = crdt.getFormattedChars()
+  assert(chars.length === 3, "3 visible chars")
+  assert(chars[1].value === "\n", "newline is second char")
+  assert(chars[1].attrs.block === "bullet", "newline has bullet block attr")
+  assert(Object.keys(chars[0].attrs).length === 0, "first char has no block")
+})
+
+runTest("Toggle bullet off removes block attr", () => {
+  const crdt = new CRDTText()
+  crdt.insert("\n", "ROOT", "nl1")
+  crdt.format("nl1", { block: "bullet" })
+  assert(crdt.chars.get("nl1").attrs.block === "bullet", "bullet set")
+
+  crdt.format("nl1", { block: false })
+  assert(crdt.chars.get("nl1").attrs.block === undefined, "bullet removed")
+})
+
+runTest("Block attr and inline attrs coexist on newline", () => {
+  const crdt = new CRDTText()
+  crdt.insert("\n", "ROOT", "nl1")
+  crdt.format("nl1", { block: "bullet", bold: true })
+
+  const node = crdt.chars.get("nl1")
+  assert(node.attrs.block === "bullet", "block attr present")
+  assert(node.attrs.bold === true, "bold attr present")
+})
+
+runTest("Serialize/deserialize preserves block attrs", () => {
+  const crdt = new CRDTText()
+  crdt.insert("x", "ROOT", "c0")
+  crdt.insert("\n", "c0", "nl1")
+  crdt.insert("y", "nl1", "c1")
+  crdt.format("nl1", { block: "bullet" })
+
+  const json = crdt.serialize()
+  const restored = CRDTText.deserialize(json)
+  const chars = restored.getFormattedChars()
+  assert(chars[1].attrs.block === "bullet", "block attr survives roundtrip")
+})
+
+runTest("Compact preserves block attrs on newlines", () => {
+  const crdt = new CRDTText()
+  crdt.insert("a", "ROOT", "c0")
+  crdt.insert("\n", "c0", "nl1")
+  crdt.insert("b", "nl1", "c1")
+  crdt.delete("c0")  // create tombstone
+  crdt.format("nl1", { block: "bullet" })
+
+  crdt.compact()
+
+  const chars = crdt.getFormattedChars()
+  assert(chars.length === 2, "2 chars after compact")
+  assert(chars[0].value === "\n", "newline first after deletion")
+  assert(chars[0].attrs.block === "bullet", "bullet preserved after compact")
+  assert(crdt.getText() === "\nb", "text correct after compact")
+})
+
+// ============================================================
 // Summary
 // ============================================================
 

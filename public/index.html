@@ -63,6 +63,13 @@ body { font-family:sans-serif; padding:20px 40px; box-sizing:border-box; display
 }
 #editor:focus { border-color:#80b0ff; }
 
+.bullet-line {
+  display:block; padding-left:24px; position:relative;
+}
+.bullet-line::before {
+  content:'\2022'; position:absolute; left:8px; color:#555;
+}
+
 #location-bar {
   text-align:right; font-size:12px; color:#888;
   margin-top:4px; font-family:monospace;
@@ -230,42 +237,68 @@ function getLastTextNode(el) {
 function renderEditor() {
   const savedSel = getSelectionOffsets()
 
-  let html = ''
-  let i = 0
-  while (i < formattedChars.length) {
+  // Split into lines, tracking bullet status from the newline that precedes each line
+  // A newline with block:"bullet" makes the NEXT line a bullet
+  const lines = []  // [{chars: [{value, attrs}], isBullet: bool}]
+  let currentLine = { chars: [], isBullet: false }
+
+  // First line: check if there's an implicit bullet at start (no newline before it)
+  // We use a convention: a newline char with block:"bullet" makes the line AFTER it a bullet.
+  // For the very first line, there's no preceding newline, so it can't be a bullet via this model.
+
+  for (let i = 0; i < formattedChars.length; i++) {
     const ch = formattedChars[i]
-    // Group consecutive chars with same attrs
-    const attrsKey = attrKey(ch.attrs)
-    let run = ''
-    while (i < formattedChars.length && attrKey(formattedChars[i].attrs) === attrsKey) {
-      const v = formattedChars[i].value
-      if (v === '\n') {
-        // Render newline: close current run, add <br>, continue
-        if (run.length > 0) {
-          html += wrapRun(run, ch.attrs)
-          run = ''
-        }
-        html += '<br>'
-      } else {
-        run += escapeHtml(v)
-      }
-      i++
+    if (ch.value === '\n') {
+      // End current line
+      lines.push(currentLine)
+      // Start new line - check if this newline has block:"bullet"
+      const isBullet = ch.attrs && ch.attrs.block === 'bullet'
+      currentLine = { chars: [], isBullet }
+    } else {
+      currentLine.chars.push(ch)
     }
-    if (run.length > 0) {
-      html += wrapRun(run, ch.attrs)
+  }
+  lines.push(currentLine)
+
+  let html = ''
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx]
+    let lineHtml = ''
+
+    // Group consecutive chars with same inline attrs
+    let i = 0
+    while (i < line.chars.length) {
+      const ch = line.chars[i]
+      const ak = inlineAttrKey(ch.attrs)
+      let run = ''
+      while (i < line.chars.length && inlineAttrKey(line.chars[i].attrs) === ak) {
+        run += escapeHtml(line.chars[i].value)
+        i++
+      }
+      lineHtml += wrapRun(run, ch.attrs)
+    }
+
+    if (line.isBullet) {
+      html += '<div class="bullet-line">' + (lineHtml || '<br>') + '</div>'
+    } else {
+      html += lineHtml
+    }
+
+    // Add line break between lines (except after last line)
+    if (lineIdx < lines.length - 1 && !line.isBullet) {
+      html += '<br>'
     }
   }
 
-  // Ensure trailing newline for contenteditable behavior
-  if (formattedChars.length === 0 || formattedChars[formattedChars.length - 1].value === '\n') {
-    html += '<br>'
+  // Ensure trailing <br> for contenteditable
+  if (formattedChars.length === 0) {
+    html = '<br>'
   }
 
   applying = true
   editor.innerHTML = html
   applying = false
 
-  // Restore cursor
   if (document.activeElement === editor) {
     setSelectionOffsets(savedSel.start, savedSel.end)
   }
@@ -289,6 +322,17 @@ function attrKey(attrs) {
   const keys = Object.keys(attrs).sort()
   if (keys.length === 0) return ''
   return keys.map(k => k + ':' + attrs[k]).join(',')
+}
+
+function inlineAttrKey(attrs) {
+  if (!attrs) return ''
+  // Only consider inline formatting attrs (not block attrs)
+  const inline = {}
+  if (attrs.bold) inline.bold = true
+  if (attrs.italic) inline.italic = true
+  const keys = Object.keys(inline).sort()
+  if (keys.length === 0) return ''
+  return keys.map(k => k + ':' + inline[k]).join(',')
 }
 
 // --- User presence rendering ---
@@ -406,6 +450,20 @@ function updateFormatButtonState() {
     }
     btn.classList.toggle('active', allHave && checkStart < formattedChars.length)
   }
+
+  // Bullet button: check if the current line is a bullet
+  const bulletBtn = document.querySelector('[data-fmt="bullet"]')
+  if (bulletBtn) {
+    let isBullet = false
+    const pos = Math.min(sel.start, sel.end)
+    for (let i = pos - 1; i >= 0; i--) {
+      if (formattedChars[i] && formattedChars[i].value === '\n') {
+        isBullet = formattedChars[i].attrs && formattedChars[i].attrs.block === 'bullet'
+        break
+      }
+    }
+    bulletBtn.classList.toggle('active', isBullet)
+  }
 }
 
 // --- Format bar click handling ---
@@ -422,8 +480,48 @@ document.getElementById("format-bar").addEventListener("click", (e) => {
   const end = Math.max(sel.start, sel.end)
 
   if (fmt === 'bullet') {
-    // Bullet: toggle on the newline that starts the current line
-    // (will be implemented in Milestone 5)
+    // Find the newline that precedes the current line
+    // The cursor is at `start`. Walk backward to find the newline before this line.
+    const cursorPos = start
+    let nlOffset = -1
+    for (let i = cursorPos - 1; i >= 0; i--) {
+      if (formattedChars[i] && formattedChars[i].value === '\n') {
+        nlOffset = i
+        break
+      }
+    }
+
+    if (nlOffset === -1) {
+      // Cursor is on the first line (no preceding newline).
+      // Insert a newline at offset 0 with block:"bullet" if there isn't one already,
+      // or if there's already a newline at position 0 that's a bullet, toggle it off.
+      // For simplicity: first line can't be a bullet (no preceding newline marker).
+      // User should press Enter first to create a new line.
+      return
+    }
+
+    // Toggle bullet on this newline
+    const isCurrentlyBullet = formattedChars[nlOffset].attrs && formattedChars[nlOffset].attrs.block === 'bullet'
+    const newAttrs = { block: isCurrentlyBullet ? false : 'bullet' }
+
+    sendOp({
+      type: "format",
+      offset: nlOffset,
+      endOffset: nlOffset + 1,
+      attrs: newAttrs,
+      clientId
+    })
+
+    // Optimistic update
+    if (!formattedChars[nlOffset].attrs) formattedChars[nlOffset].attrs = {}
+    if (isCurrentlyBullet) {
+      delete formattedChars[nlOffset].attrs.block
+    } else {
+      formattedChars[nlOffset].attrs.block = 'bullet'
+    }
+    renderEditor()
+    editor.focus()
+    setSelectionOffsets(start, end)
     return
   }
 
@@ -649,18 +747,26 @@ function applyOp(op) {
 // Get plain text from contenteditable
 function getEditorText() {
   let text = ''
-  const walk = (node) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      text += node.textContent
-    } else if (node.nodeName === 'BR') {
-      text += '\n'
-    } else if (node.nodeType === Node.ELEMENT_NODE) {
-      for (const child of node.childNodes) {
-        walk(child)
+  let isFirst = true
+  const walkChildren = (parent) => {
+    for (const node of parent.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        text += node.textContent
+      } else if (node.nodeName === 'BR') {
+        text += '\n'
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        // Bullet divs represent a line preceded by a newline
+        if (node.classList && node.classList.contains('bullet-line')) {
+          if (!isFirst) text += '\n'
+          walkChildren(node)
+        } else {
+          walkChildren(node)
+        }
       }
+      isFirst = false
     }
   }
-  walk(editor)
+  walkChildren(editor)
   // Remove trailing newline if added by contenteditable
   if (text.endsWith('\n') && !serverText.endsWith('\n')) {
     text = text.slice(0, -1)
