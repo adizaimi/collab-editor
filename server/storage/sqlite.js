@@ -84,14 +84,14 @@ class SQLiteStorage {
       const now = Date.now()
       for (const op of ops) {
         const attrs = op.attrs ? JSON.stringify(op.attrs) : null
-        this._stmts.insertOp.run(docId, op.id, op.type, op.value || null, op.after || null, attrs, now)
+        this._stmts.insertOp.run(docId, op.id, op.type, op.value != null ? op.value : null, op.after != null ? op.after : null, attrs, now)
       }
     })
   }
 
   saveOperation(docId, op){
-    const value = op.value || null
-    const afterId = op.after || null
+    const value = op.value != null ? op.value : null
+    const afterId = op.after != null ? op.after : null
     const attrs = op.attrs ? JSON.stringify(op.attrs) : null
     this._stmts.insertOp.run(docId, op.id, op.type, value, afterId, attrs, Date.now())
   }

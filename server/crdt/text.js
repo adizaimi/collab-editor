@@ -180,7 +180,7 @@ class CRDTText {
       const node = this.chars.get(id)
 
       if (id !== this.root && !node.deleted) {
-        result.push({id: node.id, value: node.value, attrs: node.attrs})
+        result.push({id: node.id, value: node.value, attrs: {...node.attrs}})
       }
 
       for (let j = node.right.length - 1; j >= 0; j--) {
@@ -204,10 +204,11 @@ class CRDTText {
     this.root = 'ROOT'
     this.chars.set(this.root, {id: this.root, value: "", left: null, right: [], deleted: false, attrs: {}})
 
+    const compactId = `compact:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`
     let afterId = 'ROOT'
     for (let i = 0; i < formattedChars.length; i++) {
-      const id = `compact:${i}:${Date.now()}`
-      const attrs = Object.keys(formattedChars[i].attrs).length > 0 ? formattedChars[i].attrs : null
+      const id = `${compactId}:${i}`
+      const attrs = Object.keys(formattedChars[i].attrs).length > 0 ? {...formattedChars[i].attrs} : null
       this.insert(formattedChars[i].value, afterId, id, attrs)
       afterId = id
     }

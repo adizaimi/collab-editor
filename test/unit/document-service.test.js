@@ -21,6 +21,7 @@ class MockStorage {
         op_id: op.id,
         value: op.value,
         after_id: op.after,
+        attrs: op.attrs ? JSON.stringify(op.attrs) : null,
         created_at: op.created_at
       }))
   }
@@ -43,6 +44,7 @@ class MockStorage {
         op_id: op.id,
         value: op.value,
         after_id: op.after,
+        attrs: op.attrs ? JSON.stringify(op.attrs) : null,
         created_at: op.created_at
       }))
   }
@@ -280,6 +282,22 @@ for (let i = 0; i < 101; i++) {
   docService16.applyOperation("doc16", { type: "insert", id: `id${i}`, value: "x", after: i === 0 ? "ROOT" : `id${i-1}` })
 }
 assert(docService16.shouldCreateSnapshot("doc16", 100), "should need snapshot at 101 ops")
+
+// Test 17: Insert with attrs preserves formatting through save/load cycle
+console.log("\n[Test 17] Insert with attrs preserves formatting through save/load")
+const storage17 = new MockStorage()
+const docService17 = new DocumentService(storage17, { useAsyncQueue: false, enableBatching: false })
+docService17.applyOperation("doc17", { type: "insert", id: "b1", value: "B", after: "ROOT", attrs: { bold: true } })
+docService17.applyOperation("doc17", { type: "insert", id: "n1", value: "x", after: "b1" })
+// Verify CRDT has the attrs
+const fmtChars17 = docService17.getFormattedChars("doc17")
+assert(fmtChars17[0].attrs.bold === true, "first char is bold in CRDT")
+assert(Object.keys(fmtChars17[1].attrs).length === 0, "second char has no attrs")
+// Verify persistence: new service loads attrs from storage
+const docService17b = new DocumentService(storage17, { useAsyncQueue: false, enableBatching: false })
+const fmtChars17b = docService17b.getFormattedChars("doc17")
+assert(fmtChars17b[0].attrs.bold === true, "bold preserved after reload from storage")
+assert(Object.keys(fmtChars17b[1].attrs).length === 0, "no-attrs char correct after reload")
 
 // Summary
 console.log("\n" + "=".repeat(60))

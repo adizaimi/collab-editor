@@ -362,6 +362,50 @@ assertEquals(docs20.length, 50, "lists all 50 documents")
 storage20.db.close()
 cleanupTestDb()
 
+// Test 21: saveOperation preserves empty string value (not converted to null)
+console.log("\n[Test 21] saveOperation preserves empty string value")
+cleanupTestDb()
+const storage21 = new SQLiteStorage()
+storage21.db = new Database(testDbPath)
+storage21.init()
+storage21.saveOperation("doc21", { id: "op1", type: "insert", value: "", after: "ROOT" })
+const ops21 = storage21.loadOperations("doc21")
+assertEquals(ops21.length, 1, "operation saved")
+assertEquals(ops21[0].value, "", "empty string value preserved (not null)")
+storage21.db.close()
+cleanupTestDb()
+
+// Test 22: saveOperationBatch preserves empty string value
+console.log("\n[Test 22] saveOperationBatch preserves empty string value")
+cleanupTestDb()
+const storage22 = new SQLiteStorage()
+storage22.db = new Database(testDbPath)
+storage22.init()
+storage22.saveOperationBatch("doc22", [
+  { id: "op1", type: "insert", value: "", after: "ROOT" },
+  { id: "op2", type: "insert", value: "a", after: "op1" }
+])
+const ops22 = storage22.loadOperations("doc22")
+assertEquals(ops22.length, 2, "both operations saved")
+assertEquals(ops22[0].value, "", "empty string preserved in batch")
+assertEquals(ops22[1].value, "a", "normal value preserved in batch")
+storage22.db.close()
+cleanupTestDb()
+
+// Test 23: saveOperation preserves attrs JSON
+console.log("\n[Test 23] saveOperation stores and preserves attrs")
+cleanupTestDb()
+const storage23 = new SQLiteStorage()
+storage23.db = new Database(testDbPath)
+storage23.init()
+storage23.saveOperation("doc23", { id: "op1", type: "insert", value: "B", after: "ROOT", attrs: { bold: true } })
+storage23.saveOperation("doc23", { id: "op2", type: "insert", value: "x", after: "op1" })
+const ops23 = storage23.loadOperations("doc23")
+assertEquals(ops23[0].attrs, '{"bold":true}', "attrs stored as JSON")
+assertEquals(ops23[1].attrs, null, "no attrs stored as null")
+storage23.db.close()
+cleanupTestDb()
+
 // Summary
 console.log("\n" + "=".repeat(60))
 console.log("SQLiteStorage Unit Tests Summary")

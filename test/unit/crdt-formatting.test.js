@@ -421,6 +421,62 @@ runTest("Compact preserves block attrs on newlines", () => {
 })
 
 // ============================================================
+// Bug fix tests
+// ============================================================
+
+runTest("compact() generates unique IDs across multiple calls", () => {
+  const crdt = buildHello()
+  crdt.compact()
+  const ids1 = new Set(Array.from(crdt.chars.keys()))
+
+  // Build new content and compact again
+  const lastId = crdt.getIdAtOffset(4)
+  crdt.insert("!", lastId, "extra1")
+  crdt.compact()
+  const ids2 = new Set(Array.from(crdt.chars.keys()))
+
+  // Ensure no collision between compacted IDs (except ROOT)
+  ids1.delete("ROOT")
+  ids2.delete("ROOT")
+  let collision = false
+  for (const id of ids1) {
+    if (ids2.has(id)) { collision = true; break }
+  }
+  assert(!collision, "no ID collision between two compact() calls")
+  assert(crdt.getText() === "hello!", "text preserved after double compact")
+})
+
+runTest("getFormattedChars() returns isolated attrs (no mutation leak)", () => {
+  const crdt = buildHello()
+  crdt.format("c0", { bold: true })
+
+  const chars = crdt.getFormattedChars()
+  // Mutate the returned attrs
+  chars[0].attrs.bold = false
+  chars[0].attrs.italic = true
+
+  // Verify the internal CRDT is not affected
+  const node = crdt.chars.get("c0")
+  assert(node.attrs.bold === true, "internal bold attr not corrupted by external mutation")
+  assert(node.attrs.italic === undefined, "no spurious italic attr from external mutation")
+})
+
+runTest("insert() with attrs stores formatting correctly", () => {
+  const crdt = new CRDTText()
+  crdt.insert("B", "ROOT", "b1", { bold: true, italic: true })
+  const chars = crdt.getFormattedChars()
+  assert(chars[0].attrs.bold === true, "inserted char has bold")
+  assert(chars[0].attrs.italic === true, "inserted char has italic")
+
+  // Verify serialize/deserialize preserves insert attrs
+  const json = crdt.serialize()
+  const restored = CRDTText.deserialize(json)
+  const rChars = restored.getFormattedChars()
+  assert(rChars[0].attrs.bold === true, "bold survives serialize roundtrip")
+  assert(rChars[0].attrs.italic === true, "italic survives serialize roundtrip")
+})
+
+// ============================================================
 // Summary
 // ============================================================
 

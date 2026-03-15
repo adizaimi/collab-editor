@@ -261,23 +261,19 @@ wss.on("connection",(ws,req)=>{
 
     if(data.type==="insert"){
       const afterId = crdt.getIdAtOffset(data.offset - 1)
+      const attrs = data.attrs || null
       // Include clientId to prevent ID collisions across concurrent clients
-      op = {type:"insert", id:`${data.clientId}:${Date.now()}:${Math.random()}`, value:data.value, after:afterId}
+      op = {type:"insert", id:`${data.clientId}:${Date.now()}:${Math.random()}`, value:data.value, after:afterId, attrs}
 
       // Apply with batching
       const actualOffset = docs.applyOperationWithBatching(docId, op, data.clientId)
 
-      broadcastOp = {type:"insert", offset: actualOffset, value:data.value, clientId:data.clientId}
+      broadcastOp = {type:"insert", offset: actualOffset, value:data.value, clientId:data.clientId, attrs}
     } else if(data.type==="delete"){
-      const chars = crdt.getVisibleChars()
-      let charId = null
+      // Use getIdAtOffset for O(offset) lookup instead of O(n) getVisibleChars()
+      const charId = crdt.getIdAtOffset(data.offset)
 
-      // Try to find character at offset
-      if(data.offset < chars.length){
-        charId = chars[data.offset].id
-      }
-
-      if(!charId) {
+      if(!charId || charId === 'ROOT') {
         console.warn(`[Delete] Character not found at offset ${data.offset} for doc ${docId}`)
         return // Character not found - operation rejected
       }

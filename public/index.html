@@ -185,6 +185,12 @@ function domOffsetToFlat(targetNode, targetOffset) {
   let count = 0
   let found = false
 
+  // Build index map for O(1) child-index lookups
+  const divIndex = new Map()
+  for (let i = 0; i < editor.childNodes.length; i++) {
+    divIndex.set(editor.childNodes[i], i)
+  }
+
   function walk(node) {
     if (found) return
 
@@ -194,7 +200,7 @@ function domOffsetToFlat(targetNode, targetOffset) {
       } else {
         // If target is a line div (after the first), count the implicit newline
         if (node.nodeName === 'DIV' && node.parentNode === editor) {
-          const idx = Array.from(editor.childNodes).indexOf(node)
+          const idx = divIndex.get(node)
           if (idx > 0) count += 1
         }
         // Count children up to targetOffset
@@ -213,7 +219,7 @@ function domOffsetToFlat(targetNode, targetOffset) {
     } else {
       // For div children of editor (after the first), count a newline
       if (node.nodeName === 'DIV' && node.parentNode === editor) {
-        const idx = Array.from(editor.childNodes).indexOf(node)
+        const idx = divIndex.get(node)
         if (idx > 0) count += 1  // newline before this line
       }
       for (let i = 0; i < node.childNodes.length; i++) {
@@ -230,7 +236,7 @@ function domOffsetToFlat(targetNode, targetOffset) {
       // empty-line placeholder, 0 chars
     } else {
       if (node.nodeName === 'DIV' && node.parentNode === editor) {
-        const idx = Array.from(editor.childNodes).indexOf(node)
+        const idx = divIndex.get(node)
         if (idx > 0) count += 1
       }
       for (let i = 0; i < node.childNodes.length; i++) {
@@ -733,11 +739,8 @@ function applyRemoteOp(op) {
     arr.splice(op.offset, 0, op.value)
     serverText = arr.join("")
 
-    let inheritedAttrs = {}
-    if (op.offset > 0 && op.offset <= formattedChars.length) {
-      inheritedAttrs = { ...formattedChars[op.offset - 1].attrs }
-    }
-    formattedChars.splice(op.offset, 0, { value: op.value, attrs: inheritedAttrs })
+    const attrs = op.attrs ? { ...op.attrs } : {}
+    formattedChars.splice(op.offset, 0, { value: op.value, attrs })
 
     if (op.offset <= savedSel.start) cursorShift = 1
   } else if (op.type === "delete") {
@@ -847,11 +850,12 @@ editor.addEventListener("beforeinput", (e) => {
 
     // Insert chars
     for (let i = 0; i < text.length; i++) {
-      sendOp({ type: "insert", value: text[i], offset: lastSelStart + i, clientId })
       let attrs = {}
       if (lastSelStart + i > 0 && formattedChars.length > 0) {
         attrs = { ...formattedChars[Math.min(lastSelStart + i - 1, formattedChars.length - 1)].attrs }
+        delete attrs.block
       }
+      sendOp({ type: "insert", value: text[i], offset: lastSelStart + i, clientId, attrs: Object.keys(attrs).length > 0 ? attrs : undefined })
       formattedChars.splice(lastSelStart + i, 0, { value: text[i], attrs })
     }
     serverText = serverText.slice(0, lastSelStart) + text + serverText.slice(lastSelStart)
@@ -891,7 +895,6 @@ editor.addEventListener("input", e => {
     // Characters were inserted at selStart
     const insertedText = newText.slice(selStart, selStart + delta)
     for (let i = 0; i < insertedText.length; i++) {
-      sendOp({ type: "insert", value: insertedText[i], offset: selStart + i, clientId })
       // Inherit attrs from the character before the insertion point
       let attrs = {}
       const inheritIdx = selStart + i - 1
@@ -900,6 +903,7 @@ editor.addEventListener("input", e => {
         // Don't inherit block attrs
         delete attrs.block
       }
+      sendOp({ type: "insert", value: insertedText[i], offset: selStart + i, clientId, attrs: Object.keys(attrs).length > 0 ? attrs : undefined })
       formattedChars.splice(selStart + i, 0, { value: insertedText[i], attrs })
     }
     serverText = serverText.slice(0, selStart) + insertedText + serverText.slice(selStart)
