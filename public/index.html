@@ -13,6 +13,23 @@ body { font-family:sans-serif; padding:20px 40px; box-sizing:border-box; display
 #status.disconnected { background:#f8d7da; color:#721c24; }
 #status.connecting { background:#fff3cd; color:#856404; }
 
+#format-bar {
+  display:flex; align-items:center; gap:4px;
+  border:1px solid #ddd; border-radius:6px; padding:2px 4px;
+  background:#fafafa;
+}
+.fmt-btn {
+  border:1px solid transparent; background:none; cursor:pointer;
+  padding:4px 8px; border-radius:4px; font-size:14px;
+  min-width:28px; text-align:center; color:#333;
+  transition: background .1s, border-color .1s;
+}
+.fmt-btn:hover { background:#e8e8e8; }
+.fmt-btn.active { background:#d0e0ff; border-color:#80b0ff; }
+.fmt-btn-bold { font-weight:bold; }
+.fmt-btn-italic { font-style:italic; }
+.fmt-sep { width:1px; height:20px; background:#ddd; margin:0 2px; }
+
 #users-bar { font-size:13px; color:#555; position:relative; display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
 #users-bar .label { font-weight:600; color:#333; margin-right:2px; }
 .user-badge {
@@ -36,28 +53,15 @@ body { font-family:sans-serif; padding:20px 40px; box-sizing:border-box; display
 
 #editor-container { position:relative; width:100%; flex:1; min-height:200px; }
 
-#backdrop {
-  position:absolute; top:0; left:0; right:0; bottom:0;
-  overflow:hidden; pointer-events:none; z-index:0;
-}
-
-#highlights {
-  font-family:monospace; font-size:16px; line-height:1.4;
-  padding:4px; border:1px solid transparent;
-  white-space:pre-wrap; word-wrap:break-word; overflow-wrap:break-word;
-  color:transparent; box-sizing:border-box;
-  width:100%; margin:0;
-}
-#highlights mark {
-  color:transparent; border-radius:3px;
-}
-
 #editor {
   width:100%; height:100%; font-family:monospace; font-size:16px; line-height:1.4;
-  padding:4px; border:1px solid #ccc; background:transparent;
-  position:relative; z-index:1; resize:none;
+  padding:4px; border:1px solid #ccc; background:#fff;
+  position:relative; z-index:1;
   box-sizing:border-box; margin:0;
+  white-space:pre-wrap; word-wrap:break-word; overflow-wrap:break-word;
+  overflow-y:auto; outline:none;
 }
+#editor:focus { border-color:#80b0ff; }
 
 #location-bar {
   text-align:right; font-size:12px; color:#888;
@@ -70,11 +74,16 @@ body { font-family:sans-serif; padding:20px 40px; box-sizing:border-box; display
 <h2>CRDT Collaborative Editor</h2>
 <div id="toolbar">
   <div id="status" class="connecting">Connecting...</div>
+  <div id="format-bar">
+    <button class="fmt-btn fmt-btn-bold" data-fmt="bold" title="Bold (Ctrl+B)">B</button>
+    <button class="fmt-btn fmt-btn-italic" data-fmt="italic" title="Italic (Ctrl+I)">I</button>
+    <div class="fmt-sep"></div>
+    <button class="fmt-btn" data-fmt="bullet" title="Bullet List">&#8226;</button>
+  </div>
   <div id="users-bar"><span class="label">Users:</span> <span id="users-list"></span></div>
 </div>
 <div id="editor-container">
-  <div id="backdrop"><div id="highlights"></div></div>
-  <textarea id="editor"></textarea>
+  <div id="editor" contenteditable="true" spellcheck="false"></div>
 </div>
 <div id="location-bar">Location: <span id="location">Ln 1, Col 1</span></div>
 
@@ -82,15 +91,14 @@ body { font-family:sans-serif; padding:20px 40px; box-sizing:border-box; display
 const editor = document.getElementById("editor")
 const statusEl = document.getElementById("status")
 const usersListEl = document.getElementById("users-list")
-const highlightsEl = document.getElementById("highlights")
-const backdropEl = document.getElementById("backdrop")
 const locationEl = document.getElementById("location")
 const params = new URLSearchParams(location.search)
 const docId = params.get("doc") || "main"
 const clientId = Math.random().toString(36).substring(7)
 
 let ws = null
-let serverText = ""
+let serverText = ""        // plain text mirror
+let formattedChars = []    // [{value, attrs:{bold,italic,...}}]
 let applying = false
 let lastSelStart = 0
 let lastSelEnd = 0
@@ -98,8 +106,8 @@ let lastInputType = ""
 
 let myUserId = null
 let myColor = null
-let currentUsers = []    // [{id, color, cursor}]
-let remoteCursors = {}   // userId -> {offset, selEnd, color}
+let currentUsers = []
+let remoteCursors = {}
 const INLINE_MAX = 3
 
 // Reconnection state
@@ -119,16 +127,168 @@ function setStatus(state, text) {
   statusEl.textContent = text
 }
 
-function applySelectionColor(color) {
-  let el = document.getElementById("selection-style")
-  if (!el) { el = document.createElement("style"); el.id = "selection-style"; document.head.appendChild(el) }
-  el.textContent = "#editor::selection { background:" + color + "50; }"
-}
-
 function sendOp(data) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(data))
   }
+}
+
+// --- Cursor offset <-> DOM position ---
+
+function getSelectionOffsets() {
+  const sel = window.getSelection()
+  if (!sel.rangeCount) return { start: 0, end: 0 }
+
+  const range = sel.getRangeAt(0)
+  const start = domOffsetToFlat(range.startContainer, range.startOffset)
+  const end = domOffsetToFlat(range.endContainer, range.endOffset)
+  return { start, end }
+}
+
+function domOffsetToFlat(node, offset) {
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null)
+  let flat = 0
+  let current
+  while ((current = walker.nextNode())) {
+    if (current === node) {
+      return flat + offset
+    }
+    flat += current.textContent.length
+  }
+  // If node is not a text node (e.g. editor itself or a span), count children
+  if (node === editor || editor.contains(node)) {
+    const walker2 = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null)
+    let count = 0
+    let idx = 0
+    let n2
+    while ((n2 = walker2.nextNode())) {
+      // For element nodes, offset = child index
+      if (node.nodeType !== Node.TEXT_NODE) {
+        // Count text nodes that are within the first `offset` child nodes
+        if (isBeforeChildIndex(n2, node, offset)) {
+          count += n2.textContent.length
+        }
+      }
+    }
+    if (node.nodeType !== Node.TEXT_NODE) return count
+  }
+  return flat
+}
+
+function isBeforeChildIndex(textNode, parentNode, childIndex) {
+  const children = Array.from(parentNode.childNodes)
+  for (let i = 0; i < childIndex && i < children.length; i++) {
+    if (children[i] === textNode || children[i].contains(textNode)) return true
+  }
+  return false
+}
+
+function setSelectionOffsets(start, end) {
+  const sel = window.getSelection()
+  const range = document.createRange()
+
+  const startPos = flatToDomOffset(start)
+  const endPos = flatToDomOffset(end)
+
+  if (startPos && endPos) {
+    range.setStart(startPos.node, startPos.offset)
+    range.setEnd(endPos.node, endPos.offset)
+    sel.removeAllRanges()
+    sel.addRange(range)
+  }
+}
+
+function flatToDomOffset(flatOffset) {
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null)
+  let remaining = flatOffset
+  let current
+  while ((current = walker.nextNode())) {
+    const len = current.textContent.length
+    if (remaining <= len) {
+      return { node: current, offset: remaining }
+    }
+    remaining -= len
+  }
+  // Past end - return last text node
+  const lastText = getLastTextNode(editor)
+  if (lastText) {
+    return { node: lastText, offset: lastText.textContent.length }
+  }
+  return null
+}
+
+function getLastTextNode(el) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null)
+  let last = null
+  let n
+  while ((n = walker.nextNode())) last = n
+  return last
+}
+
+// --- Rendering ---
+
+function renderEditor() {
+  const savedSel = getSelectionOffsets()
+
+  let html = ''
+  let i = 0
+  while (i < formattedChars.length) {
+    const ch = formattedChars[i]
+    // Group consecutive chars with same attrs
+    const attrsKey = attrKey(ch.attrs)
+    let run = ''
+    while (i < formattedChars.length && attrKey(formattedChars[i].attrs) === attrsKey) {
+      const v = formattedChars[i].value
+      if (v === '\n') {
+        // Render newline: close current run, add <br>, continue
+        if (run.length > 0) {
+          html += wrapRun(run, ch.attrs)
+          run = ''
+        }
+        html += '<br>'
+      } else {
+        run += escapeHtml(v)
+      }
+      i++
+    }
+    if (run.length > 0) {
+      html += wrapRun(run, ch.attrs)
+    }
+  }
+
+  // Ensure trailing newline for contenteditable behavior
+  if (formattedChars.length === 0 || formattedChars[formattedChars.length - 1].value === '\n') {
+    html += '<br>'
+  }
+
+  applying = true
+  editor.innerHTML = html
+  applying = false
+
+  // Restore cursor
+  if (document.activeElement === editor) {
+    setSelectionOffsets(savedSel.start, savedSel.end)
+  }
+}
+
+function wrapRun(text, attrs) {
+  if (!attrs || Object.keys(attrs).length === 0) {
+    return '<span>' + text + '</span>'
+  }
+  let style = ''
+  if (attrs.bold) style += 'font-weight:bold;'
+  if (attrs.italic) style += 'font-style:italic;'
+  if (style) {
+    return '<span style="' + style + '">' + text + '</span>'
+  }
+  return '<span>' + text + '</span>'
+}
+
+function attrKey(attrs) {
+  if (!attrs) return ''
+  const keys = Object.keys(attrs).sort()
+  if (keys.length === 0) return ''
+  return keys.map(k => k + ':' + attrs[k]).join(',')
 }
 
 // --- User presence rendering ---
@@ -137,7 +297,6 @@ function renderUsers() {
   usersListEl.innerHTML = ""
   if (currentUsers.length === 0) return
 
-  // Always list self first
   const sorted = currentUsers.slice().sort((a, b) => {
     if (a.id === myUserId) return -1
     if (b.id === myUserId) return 1
@@ -172,7 +331,6 @@ function renderUsers() {
   }
 }
 
-// Event delegation for badge clicks
 usersListEl.addEventListener("click", (e) => {
   const badge = e.target.closest(".user-badge")
   if (!badge) return
@@ -181,64 +339,22 @@ usersListEl.addEventListener("click", (e) => {
   const cursor = remoteCursors[userId]
   if (!cursor) return
   editor.focus()
-  editor.selectionStart = cursor.offset
-  editor.selectionEnd = (cursor.selEnd != null) ? cursor.selEnd : cursor.offset
+  setSelectionOffsets(cursor.offset, cursor.selEnd || cursor.offset)
 })
-
-// --- Selection highlight overlay ---
-
-function renderHighlights() {
-  const len = serverText.length
-  const sels = Object.values(remoteCursors)
-    .filter(c => c.offset !== c.selEnd)
-    .map(c => ({
-      start: Math.max(0, Math.min(len, Math.min(c.offset, c.selEnd))),
-      end:   Math.max(0, Math.min(len, Math.max(c.offset, c.selEnd))),
-      color: c.color
-    }))
-    .filter(s => s.start < s.end)
-    .sort((a, b) => a.start - b.start)
-
-  if (sels.length === 0) {
-    highlightsEl.textContent = serverText + '\n'
-    return
-  }
-
-  let html = ''
-  let pos = 0
-  for (const sel of sels) {
-    const start = Math.max(sel.start, pos)
-    const end = sel.end
-    if (start >= end) continue
-    if (start > pos) html += escapeHtml(serverText.slice(pos, start))
-    html += '<mark style="background:' + sel.color + '40">' +
-            escapeHtml(serverText.slice(start, end)) + '</mark>'
-    pos = end
-  }
-  if (pos < serverText.length) html += escapeHtml(serverText.slice(pos))
-  html += '\n'
-  highlightsEl.innerHTML = html
-}
 
 // --- Location bar ---
 
 function updateLocation() {
-  const offset = Math.min(editor.selectionStart, serverText.length)
+  const sel = getSelectionOffsets()
+  const offset = Math.min(sel.start, serverText.length)
   const before = serverText.slice(0, offset)
   const lines = before.split('\n')
   const line = lines.length
   const col = lines[lines.length - 1].length + 1
-  const selLen = Math.abs(editor.selectionEnd - editor.selectionStart)
+  const selLen = Math.abs(sel.end - sel.start)
   locationEl.textContent = 'Ln ' + line + ', Col ' + col +
     (selLen > 0 ? ' (' + selLen + ' selected)' : '')
 }
-
-// --- Scroll sync ---
-
-editor.addEventListener('scroll', () => {
-  backdropEl.scrollTop = editor.scrollTop
-  backdropEl.scrollLeft = editor.scrollLeft
-})
 
 // --- Cursor broadcasting (debounced) ---
 
@@ -246,10 +362,11 @@ let cursorTimer = null
 function sendCursorUpdate() {
   clearTimeout(cursorTimer)
   cursorTimer = setTimeout(() => {
+    const sel = getSelectionOffsets()
     sendOp({
       type: "cursor",
-      offset: editor.selectionStart,
-      selEnd: editor.selectionEnd,
+      offset: sel.start,
+      selEnd: sel.end,
       clientId
     })
   }, 50)
@@ -258,7 +375,110 @@ function sendCursorUpdate() {
 document.addEventListener('selectionchange', () => {
   if (document.activeElement !== editor) return
   updateLocation()
+  updateFormatButtonState()
   sendCursorUpdate()
+})
+
+// --- Format button state ---
+
+function updateFormatButtonState() {
+  const sel = getSelectionOffsets()
+  if (sel.start >= formattedChars.length) {
+    document.querySelectorAll('.fmt-btn').forEach(b => b.classList.remove('active'))
+    return
+  }
+
+  // Check if all chars in selection have the attr
+  const start = Math.min(sel.start, sel.end)
+  const end = Math.max(sel.start, sel.end)
+  const checkStart = start
+  const checkEnd = end > start ? end : start + 1
+
+  for (const fmt of ['bold', 'italic']) {
+    const btn = document.querySelector('[data-fmt="' + fmt + '"]')
+    if (!btn) continue
+    let allHave = true
+    for (let i = checkStart; i < checkEnd && i < formattedChars.length; i++) {
+      if (!formattedChars[i].attrs || !formattedChars[i].attrs[fmt]) {
+        allHave = false
+        break
+      }
+    }
+    btn.classList.toggle('active', allHave && checkStart < formattedChars.length)
+  }
+}
+
+// --- Format bar click handling ---
+
+document.getElementById("format-bar").addEventListener("click", (e) => {
+  const btn = e.target.closest(".fmt-btn")
+  if (!btn) return
+
+  const fmt = btn.dataset.fmt
+  if (!fmt) return
+
+  const sel = getSelectionOffsets()
+  const start = Math.min(sel.start, sel.end)
+  const end = Math.max(sel.start, sel.end)
+
+  if (fmt === 'bullet') {
+    // Bullet: toggle on the newline that starts the current line
+    // (will be implemented in Milestone 5)
+    return
+  }
+
+  // For bold/italic: toggle on selection
+  if (start === end) return // Nothing selected
+
+  // Check if all selected chars already have this format
+  let allHave = true
+  for (let i = start; i < end && i < formattedChars.length; i++) {
+    if (!formattedChars[i].attrs || !formattedChars[i].attrs[fmt]) {
+      allHave = false
+      break
+    }
+  }
+
+  const attrs = {}
+  attrs[fmt] = !allHave  // toggle: if all have it, remove; otherwise add
+
+  sendOp({
+    type: "format",
+    offset: start,
+    endOffset: end,
+    attrs: attrs,
+    clientId
+  })
+
+  // Optimistic update
+  for (let i = start; i < end && i < formattedChars.length; i++) {
+    if (!formattedChars[i].attrs) formattedChars[i].attrs = {}
+    if (attrs[fmt]) {
+      formattedChars[i].attrs[fmt] = true
+    } else {
+      delete formattedChars[i].attrs[fmt]
+    }
+  }
+  renderEditor()
+  editor.focus()
+  setSelectionOffsets(start, end)
+  updateFormatButtonState()
+})
+
+// --- Keyboard shortcuts ---
+
+editor.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+    if (e.key === 'b' || e.key === 'B') {
+      e.preventDefault()
+      const btn = document.querySelector('[data-fmt="bold"]')
+      if (btn) btn.click()
+    } else if (e.key === 'i' || e.key === 'I') {
+      e.preventDefault()
+      const btn = document.querySelector('[data-fmt="italic"]')
+      if (btn) btn.click()
+    }
+  }
 })
 
 // --- Connection ---
@@ -281,17 +501,20 @@ function connect() {
 
     if (msg.type === "init") {
       serverText = msg.text
-      applying = true
-      editor.value = serverText
-      applying = false
+      if (msg.formattedChars && msg.formattedChars.length > 0) {
+        formattedChars = msg.formattedChars
+      } else {
+        // Build formattedChars from plain text (backward compat)
+        formattedChars = Array.from(serverText).map(ch => ({ value: ch, attrs: {} }))
+      }
       if (msg.userId) myUserId = msg.userId
-      if (msg.color) { myColor = msg.color; applySelectionColor(myColor) }
+      if (msg.color) myColor = msg.color
       if (msg.users) {
         currentUsers = msg.users
         syncRemoteCursors()
         renderUsers()
       }
-      renderHighlights()
+      renderEditor()
       updateLocation()
     }
 
@@ -299,7 +522,6 @@ function connect() {
       currentUsers = msg.users
       syncRemoteCursors()
       renderUsers()
-      renderHighlights()
     }
 
     if (msg.type === "cursor") {
@@ -308,12 +530,10 @@ function connect() {
         selEnd: msg.selEnd,
         color: msg.color
       }
-      renderHighlights()
     }
 
     if (msg.type === "op") {
       applyOp(msg.op)
-      renderHighlights()
     }
   }
 
@@ -325,7 +545,6 @@ function connect() {
   ws.onerror = () => {}
 }
 
-// Sync remoteCursors from the full users list (add new, remove departed)
 function syncRemoteCursors() {
   const activeIds = new Set()
   for (const u of currentUsers) {
@@ -350,58 +569,126 @@ function scheduleReconnect() {
 // --- Editor input handling ---
 
 editor.addEventListener("beforeinput", (e) => {
-  if (!applying) {
-    lastSelStart = editor.selectionStart
-    lastSelEnd = editor.selectionEnd
-    lastInputType = e.inputType || ""
+  if (applying) return
+  const sel = getSelectionOffsets()
+  lastSelStart = sel.start
+  lastSelEnd = sel.end
+  lastInputType = e.inputType || ""
+
+  // For paste: strip formatting, insert as plain text
+  if (e.inputType === 'insertFromPaste') {
+    e.preventDefault()
+    const text = (e.dataTransfer || (e.clipboardData || (window.clipboardData))).getData('text/plain')
+    if (text) {
+      // Delete selection first
+      if (lastSelEnd > lastSelStart) {
+        for (let i = lastSelStart; i < lastSelEnd; i++) {
+          sendOp({ type: "delete", offset: lastSelStart, clientId })
+        }
+      }
+      // Insert chars
+      for (let i = 0; i < text.length; i++) {
+        sendOp({ type: "insert", value: text[i], offset: lastSelStart + i, clientId })
+      }
+    }
+    return
   }
 })
 
 function applyOp(op) {
-  applying = true
-  const textArr = serverText.split("")
-  let cursorOffset = 0
-
   if (op.type === "insert") {
-    textArr.splice(op.offset, 0, op.value)
-    if (op.offset <= lastSelStart) cursorOffset = 1
+    const arr = Array.from(serverText)
+    arr.splice(op.offset, 0, op.value)
+    serverText = arr.join("")
+
+    // Insert into formattedChars
+    // Inherit attrs from surrounding chars (simplest: inherit from char before)
+    let inheritedAttrs = {}
+    if (op.offset > 0 && op.offset <= formattedChars.length) {
+      inheritedAttrs = { ...formattedChars[op.offset - 1].attrs }
+    }
+    formattedChars.splice(op.offset, 0, { value: op.value, attrs: inheritedAttrs })
+
+    // Adjust cursor if needed
+    if (op.offset <= lastSelStart) {
+      lastSelStart++
+      lastSelEnd++
+    }
   } else if (op.type === "delete") {
-    if (op.offset < textArr.length) {
-      textArr.splice(op.offset, 1)
-      if (op.offset < lastSelStart) cursorOffset = -1
+    const arr = Array.from(serverText)
+    if (op.offset < arr.length) {
+      arr.splice(op.offset, 1)
+      serverText = arr.join("")
+      formattedChars.splice(op.offset, 1)
+
+      if (op.offset < lastSelStart) {
+        lastSelStart--
+        lastSelEnd--
+      }
+    }
+  } else if (op.type === "format") {
+    // Apply formatting to range
+    const start = op.offset
+    const end = op.endOffset !== undefined ? op.endOffset : start + 1
+    for (let i = start; i < end && i < formattedChars.length; i++) {
+      if (!formattedChars[i].attrs) formattedChars[i].attrs = {}
+      for (const [key, value] of Object.entries(op.attrs)) {
+        if (value === false || value === null) {
+          delete formattedChars[i].attrs[key]
+        } else {
+          formattedChars[i].attrs[key] = value
+        }
+      }
     }
   }
 
-  serverText = textArr.join("")
-  editor.value = serverText
-  editor.selectionStart = Math.max(0, lastSelStart + cursorOffset)
-  editor.selectionEnd = Math.max(0, lastSelEnd + cursorOffset)
-  lastSelStart = editor.selectionStart
-  lastSelEnd = editor.selectionEnd
-  applying = false
+  renderEditor()
   updateLocation()
+}
+
+// Get plain text from contenteditable
+function getEditorText() {
+  let text = ''
+  const walk = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent
+    } else if (node.nodeName === 'BR') {
+      text += '\n'
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      for (const child of node.childNodes) {
+        walk(child)
+      }
+    }
+  }
+  walk(editor)
+  // Remove trailing newline if added by contenteditable
+  if (text.endsWith('\n') && !serverText.endsWith('\n')) {
+    text = text.slice(0, -1)
+  }
+  return text
 }
 
 editor.addEventListener("input", e => {
   if (applying) return
 
-  const text = editor.value
+  const newText = getEditorText()
   const selStart = lastSelStart
   const selEnd = lastSelEnd
-  const cursorPos = editor.selectionStart
+  const curSel = getSelectionOffsets()
 
+  // Delete selection first
   if (selEnd > selStart) {
     for (let i = selStart; i < selEnd; i++) {
-      sendOp({ type: "delete", offset: selStart, char: serverText[selStart], clientId })
+      sendOp({ type: "delete", offset: selStart, clientId })
     }
   }
 
   const oldLen = serverText.length - (selEnd - selStart)
-  const newLen = text.length
+  const newLen = newText.length
   const inserted = newLen - oldLen
 
   if (inserted > 0) {
-    const insertedText = text.slice(selStart, selStart + inserted)
+    const insertedText = newText.slice(selStart, selStart + inserted)
     for (let i = 0; i < insertedText.length; i++) {
       sendOp({ type: "insert", value: insertedText[i], offset: selStart + i, clientId })
     }
@@ -410,18 +697,18 @@ editor.addEventListener("input", e => {
     for (let i = 0; i < deleteCount; i++) {
       let offset
       if (lastInputType === "deleteContentForward") {
-        offset = cursorPos
+        offset = curSel.start
       } else {
-        offset = cursorPos < selStart ? cursorPos : selStart - 1
+        offset = curSel.start < selStart ? curSel.start : selStart - 1
       }
-      sendOp({ type: "delete", offset: Math.max(0, offset), char: serverText[Math.max(0, offset)], clientId })
+      sendOp({ type: "delete", offset: Math.max(0, offset), clientId })
     }
   }
 
+  // Re-render from server state (will be updated via broadcast)
   applying = true
-  editor.value = serverText
-  editor.selectionStart = selStart
-  editor.selectionEnd = selStart
+  renderEditor()
+  setSelectionOffsets(selStart, selStart)
   lastSelStart = selStart
   lastSelEnd = selStart
   applying = false
