@@ -141,63 +141,112 @@ function sendOp(data) {
 }
 
 // --- Cursor offset <-> DOM position ---
+// These functions convert between flat character offsets (used by the CRDT)
+// and DOM positions (node + offset within node) used by the Selection API.
+// They must account for text nodes, <br> elements (= newlines), and
+// element containers (spans, bullet divs).
+
+function domOffsetToFlat(targetNode, targetOffset) {
+  let count = 0
+  let found = false
+
+  function walk(node) {
+    if (found) return
+
+    // Did we reach the target?
+    if (node === targetNode) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        count += targetOffset
+      } else {
+        // Element node: offset = number of child nodes to count through
+        for (let i = 0; i < targetOffset && i < node.childNodes.length; i++) {
+          countAll(node.childNodes[i])
+        }
+      }
+      found = true
+      return
+    }
+
+    if (node.nodeType === Node.TEXT_NODE) {
+      count += node.textContent.length
+    } else if (node.nodeName === 'BR') {
+      count += 1
+    } else {
+      for (let i = 0; i < node.childNodes.length; i++) {
+        if (found) return
+        walk(node.childNodes[i])
+      }
+    }
+  }
+
+  function countAll(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      count += node.textContent.length
+    } else if (node.nodeName === 'BR') {
+      count += 1
+    } else {
+      for (let i = 0; i < node.childNodes.length; i++) {
+        countAll(node.childNodes[i])
+      }
+    }
+  }
+
+  walk(editor)
+  return count
+}
+
+function flatToDomOffset(flatOffset) {
+  let remaining = flatOffset
+
+  function walk(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (remaining <= node.textContent.length) {
+        return { node: node, offset: remaining }
+      }
+      remaining -= node.textContent.length
+      return null
+    }
+
+    if (node.nodeName === 'BR') {
+      if (remaining === 0) {
+        // Position right before this BR in its parent
+        const parent = node.parentNode
+        const idx = Array.from(parent.childNodes).indexOf(node)
+        return { node: parent, offset: idx }
+      }
+      remaining -= 1
+      return null
+    }
+
+    for (let i = 0; i < node.childNodes.length; i++) {
+      const result = walk(node.childNodes[i])
+      if (result) return result
+    }
+    return null
+  }
+
+  const result = walk(editor)
+  if (result) return result
+
+  // Past end — position at end of editor
+  return { node: editor, offset: editor.childNodes.length }
+}
 
 function getSelectionOffsets() {
   const sel = window.getSelection()
   if (!sel.rangeCount) return { start: 0, end: 0 }
-
   const range = sel.getRangeAt(0)
   const start = domOffsetToFlat(range.startContainer, range.startOffset)
   const end = domOffsetToFlat(range.endContainer, range.endOffset)
   return { start, end }
 }
 
-function domOffsetToFlat(node, offset) {
-  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null)
-  let flat = 0
-  let current
-  while ((current = walker.nextNode())) {
-    if (current === node) {
-      return flat + offset
-    }
-    flat += current.textContent.length
-  }
-  // If node is not a text node (e.g. editor itself or a span), count children
-  if (node === editor || editor.contains(node)) {
-    const walker2 = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null)
-    let count = 0
-    let idx = 0
-    let n2
-    while ((n2 = walker2.nextNode())) {
-      // For element nodes, offset = child index
-      if (node.nodeType !== Node.TEXT_NODE) {
-        // Count text nodes that are within the first `offset` child nodes
-        if (isBeforeChildIndex(n2, node, offset)) {
-          count += n2.textContent.length
-        }
-      }
-    }
-    if (node.nodeType !== Node.TEXT_NODE) return count
-  }
-  return flat
-}
-
-function isBeforeChildIndex(textNode, parentNode, childIndex) {
-  const children = Array.from(parentNode.childNodes)
-  for (let i = 0; i < childIndex && i < children.length; i++) {
-    if (children[i] === textNode || children[i].contains(textNode)) return true
-  }
-  return false
-}
-
 function setSelectionOffsets(start, end) {
   const sel = window.getSelection()
-  const range = document.createRange()
-
   const startPos = flatToDomOffset(start)
   const endPos = flatToDomOffset(end)
-
   if (startPos && endPos) {
+    const range = document.createRange()
     range.setStart(startPos.node, startPos.offset)
     range.setEnd(endPos.node, endPos.offset)
     sel.removeAllRanges()
@@ -205,53 +254,21 @@ function setSelectionOffsets(start, end) {
   }
 }
 
-function flatToDomOffset(flatOffset) {
-  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null)
-  let remaining = flatOffset
-  let current
-  while ((current = walker.nextNode())) {
-    const len = current.textContent.length
-    if (remaining <= len) {
-      return { node: current, offset: remaining }
-    }
-    remaining -= len
-  }
-  // Past end - return last text node
-  const lastText = getLastTextNode(editor)
-  if (lastText) {
-    return { node: lastText, offset: lastText.textContent.length }
-  }
-  return null
-}
-
-function getLastTextNode(el) {
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null)
-  let last = null
-  let n
-  while ((n = walker.nextNode())) last = n
-  return last
-}
-
 // --- Rendering ---
+// Builds the editor innerHTML from formattedChars.
+// Only called on init and when a REMOTE operation arrives.
+// Local edits use optimistic updates and do NOT re-render
+// (the DOM already shows what the user typed).
 
 function renderEditor() {
-  const savedSel = getSelectionOffsets()
-
-  // Split into lines, tracking bullet status from the newline that precedes each line
-  // A newline with block:"bullet" makes the NEXT line a bullet
-  const lines = []  // [{chars: [{value, attrs}], isBullet: bool}]
+  // Split into lines; a newline with block:"bullet" makes the NEXT line a bullet.
+  const lines = []
   let currentLine = { chars: [], isBullet: false }
-
-  // First line: check if there's an implicit bullet at start (no newline before it)
-  // We use a convention: a newline char with block:"bullet" makes the line AFTER it a bullet.
-  // For the very first line, there's no preceding newline, so it can't be a bullet via this model.
 
   for (let i = 0; i < formattedChars.length; i++) {
     const ch = formattedChars[i]
     if (ch.value === '\n') {
-      // End current line
       lines.push(currentLine)
-      // Start new line - check if this newline has block:"bullet"
       const isBullet = ch.attrs && ch.attrs.block === 'bullet'
       currentLine = { chars: [], isBullet }
     } else {
@@ -265,7 +282,6 @@ function renderEditor() {
     const line = lines[lineIdx]
     let lineHtml = ''
 
-    // Group consecutive chars with same inline attrs
     let i = 0
     while (i < line.chars.length) {
       const ch = line.chars[i]
@@ -284,55 +300,34 @@ function renderEditor() {
       html += lineHtml
     }
 
-    // Add line break between lines (except after last line)
     if (lineIdx < lines.length - 1 && !line.isBullet) {
       html += '<br>'
     }
   }
 
-  // Ensure trailing <br> for contenteditable
   if (formattedChars.length === 0) {
     html = '<br>'
   }
 
-  applying = true
   editor.innerHTML = html
-  applying = false
-
-  if (document.activeElement === editor) {
-    setSelectionOffsets(savedSel.start, savedSel.end)
-  }
 }
 
 function wrapRun(text, attrs) {
-  if (!attrs || Object.keys(attrs).length === 0) {
-    return '<span>' + text + '</span>'
-  }
   let style = ''
-  if (attrs.bold) style += 'font-weight:bold;'
-  if (attrs.italic) style += 'font-style:italic;'
+  if (attrs && attrs.bold) style += 'font-weight:bold;'
+  if (attrs && attrs.italic) style += 'font-style:italic;'
   if (style) {
     return '<span style="' + style + '">' + text + '</span>'
   }
   return '<span>' + text + '</span>'
 }
 
-function attrKey(attrs) {
-  if (!attrs) return ''
-  const keys = Object.keys(attrs).sort()
-  if (keys.length === 0) return ''
-  return keys.map(k => k + ':' + attrs[k]).join(',')
-}
-
 function inlineAttrKey(attrs) {
   if (!attrs) return ''
-  // Only consider inline formatting attrs (not block attrs)
-  const inline = {}
-  if (attrs.bold) inline.bold = true
-  if (attrs.italic) inline.italic = true
-  const keys = Object.keys(inline).sort()
-  if (keys.length === 0) return ''
-  return keys.map(k => k + ':' + inline[k]).join(',')
+  const parts = []
+  if (attrs.bold) parts.push('b')
+  if (attrs.italic) parts.push('i')
+  return parts.join(',')
 }
 
 // --- User presence rendering ---
@@ -432,7 +427,6 @@ function updateFormatButtonState() {
     return
   }
 
-  // Check if all chars in selection have the attr
   const start = Math.min(sel.start, sel.end)
   const end = Math.max(sel.start, sel.end)
   const checkStart = start
@@ -451,14 +445,13 @@ function updateFormatButtonState() {
     btn.classList.toggle('active', allHave && checkStart < formattedChars.length)
   }
 
-  // Bullet button: check if the current line is a bullet
   const bulletBtn = document.querySelector('[data-fmt="bullet"]')
   if (bulletBtn) {
     let isBullet = false
     const pos = Math.min(sel.start, sel.end)
     for (let i = pos - 1; i >= 0; i--) {
       if (formattedChars[i] && formattedChars[i].value === '\n') {
-        isBullet = formattedChars[i].attrs && formattedChars[i].attrs.block === 'bullet'
+        isBullet = !!(formattedChars[i].attrs && formattedChars[i].attrs.block === 'bullet')
         break
       }
     }
@@ -471,7 +464,6 @@ function updateFormatButtonState() {
 document.getElementById("format-bar").addEventListener("click", (e) => {
   const btn = e.target.closest(".fmt-btn")
   if (!btn) return
-
   const fmt = btn.dataset.fmt
   if (!fmt) return
 
@@ -480,37 +472,19 @@ document.getElementById("format-bar").addEventListener("click", (e) => {
   const end = Math.max(sel.start, sel.end)
 
   if (fmt === 'bullet') {
-    // Find the newline that precedes the current line
-    // The cursor is at `start`. Walk backward to find the newline before this line.
-    const cursorPos = start
     let nlOffset = -1
-    for (let i = cursorPos - 1; i >= 0; i--) {
+    for (let i = start - 1; i >= 0; i--) {
       if (formattedChars[i] && formattedChars[i].value === '\n') {
         nlOffset = i
         break
       }
     }
+    if (nlOffset === -1) return
 
-    if (nlOffset === -1) {
-      // Cursor is on the first line (no preceding newline).
-      // Insert a newline at offset 0 with block:"bullet" if there isn't one already,
-      // or if there's already a newline at position 0 that's a bullet, toggle it off.
-      // For simplicity: first line can't be a bullet (no preceding newline marker).
-      // User should press Enter first to create a new line.
-      return
-    }
-
-    // Toggle bullet on this newline
-    const isCurrentlyBullet = formattedChars[nlOffset].attrs && formattedChars[nlOffset].attrs.block === 'bullet'
+    const isCurrentlyBullet = !!(formattedChars[nlOffset].attrs && formattedChars[nlOffset].attrs.block === 'bullet')
     const newAttrs = { block: isCurrentlyBullet ? false : 'bullet' }
 
-    sendOp({
-      type: "format",
-      offset: nlOffset,
-      endOffset: nlOffset + 1,
-      attrs: newAttrs,
-      clientId
-    })
+    sendOp({ type: "format", offset: nlOffset, endOffset: nlOffset + 1, attrs: newAttrs, clientId })
 
     // Optimistic update
     if (!formattedChars[nlOffset].attrs) formattedChars[nlOffset].attrs = {}
@@ -525,10 +499,9 @@ document.getElementById("format-bar").addEventListener("click", (e) => {
     return
   }
 
-  // For bold/italic: toggle on selection
-  if (start === end) return // Nothing selected
+  // Bold / italic: need a selection
+  if (start === end) return
 
-  // Check if all selected chars already have this format
   let allHave = true
   for (let i = start; i < end && i < formattedChars.length; i++) {
     if (!formattedChars[i].attrs || !formattedChars[i].attrs[fmt]) {
@@ -538,15 +511,9 @@ document.getElementById("format-bar").addEventListener("click", (e) => {
   }
 
   const attrs = {}
-  attrs[fmt] = !allHave  // toggle: if all have it, remove; otherwise add
+  attrs[fmt] = !allHave
 
-  sendOp({
-    type: "format",
-    offset: start,
-    endOffset: end,
-    attrs: attrs,
-    clientId
-  })
+  sendOp({ type: "format", offset: start, endOffset: end, attrs, clientId })
 
   // Optimistic update
   for (let i = start; i < end && i < formattedChars.length; i++) {
@@ -569,12 +536,10 @@ editor.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
     if (e.key === 'b' || e.key === 'B') {
       e.preventDefault()
-      const btn = document.querySelector('[data-fmt="bold"]')
-      if (btn) btn.click()
+      document.querySelector('[data-fmt="bold"]').click()
     } else if (e.key === 'i' || e.key === 'I') {
       e.preventDefault()
-      const btn = document.querySelector('[data-fmt="italic"]')
-      if (btn) btn.click()
+      document.querySelector('[data-fmt="italic"]').click()
     }
   }
 })
@@ -583,7 +548,6 @@ editor.addEventListener("keydown", (e) => {
 
 function connect() {
   if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return
-
   setStatus("connecting", reconnectAttempts > 0
     ? "Reconnecting (attempt " + reconnectAttempts + ")..." : "Connecting...")
 
@@ -602,7 +566,6 @@ function connect() {
       if (msg.formattedChars && msg.formattedChars.length > 0) {
         formattedChars = msg.formattedChars
       } else {
-        // Build formattedChars from plain text (backward compat)
         formattedChars = Array.from(serverText).map(ch => ({ value: ch, attrs: {} }))
       }
       if (msg.userId) myUserId = msg.userId
@@ -631,7 +594,7 @@ function connect() {
     }
 
     if (msg.type === "op") {
-      applyOp(msg.op)
+      applyRemoteOp(msg.op)
     }
   }
 
@@ -639,7 +602,6 @@ function connect() {
     setStatus("disconnected", "Disconnected")
     scheduleReconnect()
   }
-
   ws.onerror = () => {}
 }
 
@@ -664,68 +626,40 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(() => { reconnectTimer = null; connect() }, delay)
 }
 
-// --- Editor input handling ---
+// --- Remote operations ---
+// These arrive via broadcast from the server.
+// We SKIP ops that originated from us (same clientId) because we already
+// applied them optimistically in the input handler.
 
-editor.addEventListener("beforeinput", (e) => {
-  if (applying) return
-  const sel = getSelectionOffsets()
-  lastSelStart = sel.start
-  lastSelEnd = sel.end
-  lastInputType = e.inputType || ""
+function applyRemoteOp(op) {
+  // Skip our own echoed operations — already applied optimistically
+  if (op.clientId === clientId) return
 
-  // For paste: strip formatting, insert as plain text
-  if (e.inputType === 'insertFromPaste') {
-    e.preventDefault()
-    const text = (e.dataTransfer || (e.clipboardData || (window.clipboardData))).getData('text/plain')
-    if (text) {
-      // Delete selection first
-      if (lastSelEnd > lastSelStart) {
-        for (let i = lastSelStart; i < lastSelEnd; i++) {
-          sendOp({ type: "delete", offset: lastSelStart, clientId })
-        }
-      }
-      // Insert chars
-      for (let i = 0; i < text.length; i++) {
-        sendOp({ type: "insert", value: text[i], offset: lastSelStart + i, clientId })
-      }
-    }
-    return
-  }
-})
+  const savedSel = getSelectionOffsets()
+  let cursorShift = 0
 
-function applyOp(op) {
   if (op.type === "insert") {
     const arr = Array.from(serverText)
     arr.splice(op.offset, 0, op.value)
     serverText = arr.join("")
 
-    // Insert into formattedChars
-    // Inherit attrs from surrounding chars (simplest: inherit from char before)
     let inheritedAttrs = {}
     if (op.offset > 0 && op.offset <= formattedChars.length) {
       inheritedAttrs = { ...formattedChars[op.offset - 1].attrs }
     }
     formattedChars.splice(op.offset, 0, { value: op.value, attrs: inheritedAttrs })
 
-    // Adjust cursor if needed
-    if (op.offset <= lastSelStart) {
-      lastSelStart++
-      lastSelEnd++
-    }
+    if (op.offset <= savedSel.start) cursorShift = 1
   } else if (op.type === "delete") {
-    const arr = Array.from(serverText)
-    if (op.offset < arr.length) {
+    if (op.offset < serverText.length) {
+      const arr = Array.from(serverText)
       arr.splice(op.offset, 1)
       serverText = arr.join("")
       formattedChars.splice(op.offset, 1)
 
-      if (op.offset < lastSelStart) {
-        lastSelStart--
-        lastSelEnd--
-      }
+      if (op.offset < savedSel.start) cursorShift = -1
     }
   } else if (op.type === "format") {
-    // Apply formatting to range
     const start = op.offset
     const end = op.endOffset !== undefined ? op.endOffset : start + 1
     for (let i = start; i < end && i < formattedChars.length; i++) {
@@ -740,39 +674,90 @@ function applyOp(op) {
     }
   }
 
+  // Re-render and restore cursor
+  applying = true
   renderEditor()
+  if (document.activeElement === editor) {
+    setSelectionOffsets(
+      Math.max(0, savedSel.start + cursorShift),
+      Math.max(0, savedSel.end + cursorShift)
+    )
+  }
+  applying = false
   updateLocation()
 }
 
-// Get plain text from contenteditable
+// --- Editor input handling ---
+// Uses optimistic updates: local edits update serverText/formattedChars
+// immediately and leave the DOM as-is (user already sees their edit).
+// When the server echoes our ops back, we skip them (see applyRemoteOp).
+
+// Get plain text from contenteditable DOM
 function getEditorText() {
   let text = ''
-  let isFirst = true
-  const walkChildren = (parent) => {
-    for (const node of parent.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        text += node.textContent
-      } else if (node.nodeName === 'BR') {
+  function walk(node) {
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        text += child.textContent
+      } else if (child.nodeName === 'BR') {
         text += '\n'
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        // Bullet divs represent a line preceded by a newline
-        if (node.classList && node.classList.contains('bullet-line')) {
-          if (!isFirst) text += '\n'
-          walkChildren(node)
-        } else {
-          walkChildren(node)
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        // Block-level elements (like bullet divs) get a preceding newline
+        // unless they're the very first child
+        if (child.classList && child.classList.contains('bullet-line') && text.length > 0) {
+          text += '\n'
         }
+        walk(child)
       }
-      isFirst = false
     }
   }
-  walkChildren(editor)
-  // Remove trailing newline if added by contenteditable
-  if (text.endsWith('\n') && !serverText.endsWith('\n')) {
-    text = text.slice(0, -1)
-  }
+  walk(editor)
   return text
 }
+
+editor.addEventListener("beforeinput", (e) => {
+  if (applying) return
+  const sel = getSelectionOffsets()
+  lastSelStart = sel.start
+  lastSelEnd = sel.end
+  lastInputType = e.inputType || ""
+
+  // Paste: strip formatting, insert as plain text
+  if (e.inputType === 'insertFromPaste') {
+    e.preventDefault()
+    const dt = e.dataTransfer || e.clipboardData || window.clipboardData
+    if (!dt) return
+    const text = dt.getData('text/plain')
+    if (!text) return
+
+    // Delete selection
+    if (lastSelEnd > lastSelStart) {
+      for (let i = lastSelStart; i < lastSelEnd; i++) {
+        sendOp({ type: "delete", offset: lastSelStart, clientId })
+      }
+      formattedChars.splice(lastSelStart, lastSelEnd - lastSelStart)
+      serverText = serverText.slice(0, lastSelStart) + serverText.slice(lastSelEnd)
+    }
+
+    // Insert chars
+    for (let i = 0; i < text.length; i++) {
+      sendOp({ type: "insert", value: text[i], offset: lastSelStart + i, clientId })
+      let attrs = {}
+      if (lastSelStart + i > 0 && formattedChars.length > 0) {
+        attrs = { ...formattedChars[Math.min(lastSelStart + i - 1, formattedChars.length - 1)].attrs }
+      }
+      formattedChars.splice(lastSelStart + i, 0, { value: text[i], attrs })
+    }
+    serverText = serverText.slice(0, lastSelStart) + text + serverText.slice(lastSelStart)
+
+    // Re-render and place cursor after pasted text
+    renderEditor()
+    editor.focus()
+    const newCursor = lastSelStart + text.length
+    setSelectionOffsets(newCursor, newCursor)
+    return
+  }
+})
 
 editor.addEventListener("input", e => {
   if (applying) return
@@ -780,44 +765,70 @@ editor.addEventListener("input", e => {
   const newText = getEditorText()
   const selStart = lastSelStart
   const selEnd = lastSelEnd
-  const curSel = getSelectionOffsets()
 
-  // Delete selection first
+  // 1) Delete the old selection (if any)
   if (selEnd > selStart) {
     for (let i = selStart; i < selEnd; i++) {
       sendOp({ type: "delete", offset: selStart, clientId })
     }
+    // Optimistic: remove from our model
+    formattedChars.splice(selStart, selEnd - selStart)
+    serverText = serverText.slice(0, selStart) + serverText.slice(selEnd)
   }
 
-  const oldLen = serverText.length - (selEnd - selStart)
+  // 2) Figure out what was inserted or deleted
+  const oldLen = serverText.length
   const newLen = newText.length
-  const inserted = newLen - oldLen
+  const delta = newLen - oldLen
 
-  if (inserted > 0) {
-    const insertedText = newText.slice(selStart, selStart + inserted)
+  if (delta > 0) {
+    // Characters were inserted at selStart
+    const insertedText = newText.slice(selStart, selStart + delta)
     for (let i = 0; i < insertedText.length; i++) {
       sendOp({ type: "insert", value: insertedText[i], offset: selStart + i, clientId })
+      // Inherit attrs from the character before the insertion point
+      let attrs = {}
+      const inheritIdx = selStart + i - 1
+      if (inheritIdx >= 0 && inheritIdx < formattedChars.length) {
+        attrs = { ...formattedChars[inheritIdx].attrs }
+        // Don't inherit block attrs
+        delete attrs.block
+      }
+      formattedChars.splice(selStart + i, 0, { value: insertedText[i], attrs })
     }
-  } else if (inserted < 0) {
-    const deleteCount = -inserted
+    serverText = serverText.slice(0, selStart) + insertedText + serverText.slice(selStart)
+  } else if (delta < 0) {
+    // Characters were deleted
+    const deleteCount = -delta
+    const curSel = getSelectionOffsets()
     for (let i = 0; i < deleteCount; i++) {
       let offset
       if (lastInputType === "deleteContentForward") {
-        offset = curSel.start
+        offset = selStart
       } else {
-        offset = curSel.start < selStart ? curSel.start : selStart - 1
+        // Backspace: characters deleted before the old cursor
+        offset = selStart - deleteCount
       }
-      sendOp({ type: "delete", offset: Math.max(0, offset), clientId })
+      offset = Math.max(0, offset)
+      sendOp({ type: "delete", offset, clientId })
     }
+    // Optimistic: remove from our model
+    let delOffset
+    if (lastInputType === "deleteContentForward") {
+      delOffset = selStart
+    } else {
+      delOffset = Math.max(0, selStart - deleteCount)
+    }
+    formattedChars.splice(delOffset, deleteCount)
+    serverText = serverText.slice(0, delOffset) + serverText.slice(delOffset + deleteCount)
   }
 
-  // Re-render from server state (will be updated via broadcast)
-  applying = true
-  renderEditor()
-  setSelectionOffsets(selStart, selStart)
-  lastSelStart = selStart
-  lastSelEnd = selStart
-  applying = false
+  // Do NOT re-render — the DOM already shows the correct state from the user's edit.
+  // Update cursor tracking from the live DOM.
+  const curSel = getSelectionOffsets()
+  lastSelStart = curSel.start
+  lastSelEnd = curSel.end
+  updateLocation()
 })
 
 connect()
