@@ -533,6 +533,38 @@ document.getElementById("format-bar").addEventListener("click", (e) => {
 // --- Keyboard shortcuts ---
 
 editor.addEventListener("keydown", (e) => {
+  // Handle Enter ourselves to avoid browser contenteditable quirks.
+  // Browsers create <div> wrappers on the first Enter which getEditorText()
+  // wouldn't count as a newline, causing the op to be silently lost.
+  if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault()
+    const sel = getSelectionOffsets()
+    const start = Math.min(sel.start, sel.end)
+    const end = Math.max(sel.start, sel.end)
+
+    // Delete selection if any
+    if (end > start) {
+      for (let i = start; i < end; i++) {
+        sendOp({ type: "delete", offset: start, clientId })
+      }
+      formattedChars.splice(start, end - start)
+      serverText = serverText.slice(0, start) + serverText.slice(end)
+    }
+
+    // Insert newline
+    sendOp({ type: "insert", value: "\n", offset: start, clientId })
+    formattedChars.splice(start, 0, { value: "\n", attrs: {} })
+    serverText = serverText.slice(0, start) + "\n" + serverText.slice(start)
+
+    // Re-render and place cursor after the newline
+    renderEditor()
+    editor.focus()
+    setSelectionOffsets(start + 1, start + 1)
+    lastSelStart = start + 1
+    lastSelEnd = start + 1
+    return
+  }
+
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
     if (e.key === 'b' || e.key === 'B') {
       e.preventDefault()
@@ -693,6 +725,9 @@ function applyRemoteOp(op) {
 // When the server echoes our ops back, we skip them (see applyRemoteOp).
 
 // Get plain text from contenteditable DOM
+// Block-level tag names that browsers may create inside contenteditable
+const BLOCK_TAGS = new Set(['DIV', 'P', 'BLOCKQUOTE', 'LI', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'])
+
 function getEditorText() {
   let text = ''
   function walk(node) {
@@ -702,9 +737,10 @@ function getEditorText() {
       } else if (child.nodeName === 'BR') {
         text += '\n'
       } else if (child.nodeType === Node.ELEMENT_NODE) {
-        // Block-level elements (like bullet divs) get a preceding newline
-        // unless they're the very first child
-        if (child.classList && child.classList.contains('bullet-line') && text.length > 0) {
+        // Block-level elements (divs from Enter, bullet divs, etc.)
+        // contribute a newline before their content unless at start
+        const isBlock = BLOCK_TAGS.has(child.nodeName)
+        if (isBlock && text.length > 0 && !text.endsWith('\n')) {
           text += '\n'
         }
         walk(child)
