@@ -42,8 +42,28 @@ const testSuites = [
     type: "unit"
   },
   {
+    name: "Additional CRDT Unit Tests",
+    path: path.join(__dirname, "unit/crdt-additional.test.js"),
+    type: "unit"
+  },
+  {
+    name: "OperationQueue Unit Tests",
+    path: path.join(__dirname, "unit/operation-queue.test.js"),
+    type: "unit"
+  },
+  {
+    name: "Large Document Unit Tests",
+    path: path.join(__dirname, "unit/large-document.test.js"),
+    type: "unit"
+  },
+  {
     name: "Server-Client E2E Tests",
     path: path.join(__dirname, "e2e/server-client.test.js"),
+    type: "e2e"
+  },
+  {
+    name: "Presence, Colors & Cursor E2E Tests",
+    path: path.join(__dirname, "e2e/presence-cursor.test.js"),
     type: "e2e"
   }
 ]

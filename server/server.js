@@ -101,14 +101,41 @@ const wss = new WebSocket.Server({ server })
 const docUsers = new Map()
 let userCounter = 0
 
+// 20 distinct colors — high saturation, good contrast with both white text and dark editor text
+const USER_COLORS = [
+  '#E53935', '#1E88E5', '#43A047', '#FB8C00', '#8E24AA',
+  '#00ACC1', '#D81B60', '#3949AB', '#7CB342', '#F4511E',
+  '#039BE5', '#C0CA33', '#5E35B1', '#00897B', '#FFB300',
+  '#6D4C41', '#546E7A', '#EC407A', '#26A69A', '#AB47BC'
+]
+
 function assignUserId() {
   userCounter++
   return `user${userCounter}`
 }
 
+function assignColor(docId) {
+  const usedColors = new Set()
+  const users = docUsers.get(docId)
+  if (users) {
+    for (const ws of users.values()) {
+      if (ws.color) usedColors.add(ws.color)
+    }
+  }
+  for (const color of USER_COLORS) {
+    if (!usedColors.has(color)) return color
+  }
+  return USER_COLORS[userCounter % USER_COLORS.length]
+}
+
 function getUsersForDoc(docId) {
   const users = docUsers.get(docId)
-  return users ? Array.from(users.keys()) : []
+  if (!users) return []
+  return Array.from(users.entries()).map(([id, ws]) => ({
+    id,
+    color: ws.color,
+    cursor: ws.cursor
+  }))
 }
 
 function broadcastUsers(docId) {
@@ -148,8 +175,11 @@ wss.on("connection",(ws,req)=>{
   const url = new URL(req.url, "http://x")
   const docId = url.searchParams.get("doc") || "main"
   const userId = assignUserId()
+  const color = assignColor(docId)
   ws.docId = docId
   ws.userId = userId
+  ws.color = color
+  ws.cursor = { offset: 0, selEnd: 0 }
   ws.lastPong = Date.now()
 
   ws.on('pong', () => {
@@ -167,14 +197,14 @@ wss.on("connection",(ws,req)=>{
   metrics.record('connections.active', wss.clients.size)
   metrics.increment('connections.by_document', { doc_id: docId })
 
-  // Send full document text and assigned userId to new client
+  // Send full document text, assigned userId/color, and user list to new client
   const text = docs.getText(docId)
-  ws.send(JSON.stringify({type:"init", text, userId, users: getUsersForDoc(docId)}))
+  ws.send(JSON.stringify({type:"init", text, userId, color, users: getUsersForDoc(docId)}))
 
   // Track document size metrics
   metrics.record('document.text_length', text.length, { doc_id: docId })
 
-  ws.on("message", msg=>{
+  ws.on("message", async msg=>{
     const startTime = Date.now()
 
     let data
@@ -192,6 +222,23 @@ wss.on("connection",(ws,req)=>{
       console.error('[WebSocket] Missing required fields:', data)
       metrics.increment('errors.invalid_message', { doc_id: docId })
       ws.send(JSON.stringify({type: 'error', message: 'Missing required fields'}))
+      return
+    }
+
+    // Handle cursor position updates (lightweight, no CRDT needed)
+    if (data.type === "cursor") {
+      ws.cursor = { offset: data.offset || 0, selEnd: data.selEnd || 0 }
+      for (const c of wss.clients) {
+        if (c !== ws && c.readyState === WebSocket.OPEN && c.docId === docId) {
+          c.send(JSON.stringify({
+            type: "cursor",
+            userId: ws.userId,
+            color: ws.color,
+            offset: ws.cursor.offset,
+            selEnd: ws.cursor.selEnd
+          }))
+        }
+      }
       return
     }
 
@@ -254,7 +301,7 @@ wss.on("connection",(ws,req)=>{
 
     // Check if snapshot needed based on operation count
     if(docs.shouldCreateSnapshot(docId, SNAPSHOT_THRESHOLD)){
-      createSnapshot(docId)
+      await createSnapshot(docId)
     }
   })
 

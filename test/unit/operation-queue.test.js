@@ -11,6 +11,12 @@ class MockStorage {
     this.operations.push({ docId, op })
   }
 
+  saveOperationBatch(docId, ops) {
+    for (const op of ops) {
+      this.operations.push({ docId, op })
+    }
+  }
+
   getOperations() {
     return this.operations
   }
@@ -32,6 +38,7 @@ async function runTests() {
 
   let passedTests = 0
   let totalTests = 0
+  const allQueues = [] // Track all queues for cleanup
 
   // Test 1: Basic enqueue and stats
   {
@@ -39,7 +46,7 @@ async function runTests() {
     console.log('\nTest 1: Basic enqueue and stats tracking')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 100 })
+    const queue = new OperationQueue(storage, { flushInterval: 100 }); allQueues.push(queue)
 
     const op1 = { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }
     const op2 = { type: 'insert', id: 'op2', value: 'b', after: 'op1' }
@@ -62,7 +69,7 @@ async function runTests() {
     console.log('\nTest 2: Auto-flush after interval')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 100 })
+    const queue = new OperationQueue(storage, { flushInterval: 100 }); allQueues.push(queue)
 
     const op = { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }
     await queue.enqueue('doc1', op, 'client1', 0)
@@ -85,7 +92,7 @@ async function runTests() {
     console.log('\nTest 3: Manual flush')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 }) // Long interval
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue) // Long interval
 
     const op = { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }
     await queue.enqueue('doc1', op, 'client1', 0)
@@ -107,7 +114,7 @@ async function runTests() {
     console.log('\nTest 4: Flush all documents')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
 
     const op1 = { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }
     const op2 = { type: 'insert', id: 'op2', value: 'b', after: 'ROOT' }
@@ -133,7 +140,7 @@ async function runTests() {
     console.log('\nTest 5: Batch consecutive inserts from same client')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
 
     // Consecutive inserts
     await queue.enqueue('doc1', { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }, 'client1', 0)
@@ -158,7 +165,7 @@ async function runTests() {
     console.log('\nTest 6: Batch consecutive deletes from same client')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
 
     // Consecutive deletes (Delete key - same offset)
     await queue.enqueue('doc1', { type: 'delete', id: 'id1' }, 'client1', 5)
@@ -181,7 +188,7 @@ async function runTests() {
     console.log('\nTest 7: Batch backspace deletes (decreasing offset)')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
 
     // Backspace deletes (decreasing offset)
     await queue.enqueue('doc1', { type: 'delete', id: 'id1' }, 'client1', 5)
@@ -203,7 +210,7 @@ async function runTests() {
     console.log('\nTest 8: Do not batch operations from different clients')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
 
     await queue.enqueue('doc1', { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }, 'client1', 0)
     await queue.enqueue('doc1', { type: 'insert', id: 'op2', value: 'b', after: 'op1' }, 'client2', 1)
@@ -223,7 +230,7 @@ async function runTests() {
     console.log('\nTest 9: Do not batch non-consecutive operations')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
 
     // Non-consecutive inserts
     await queue.enqueue('doc1', { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }, 'client1', 0)
@@ -244,7 +251,7 @@ async function runTests() {
     console.log('\nTest 10: Queue size limit triggers immediate flush')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000, maxQueueSize: 5 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000, maxQueueSize: 5 }); allQueues.push(queue)
 
     // Add operations up to limit
     for (let i = 0; i < 6; i++) {
@@ -265,7 +272,7 @@ async function runTests() {
     console.log('\nTest 11: Max batch size limit is respected')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000, maxBatchSize: 3 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000, maxBatchSize: 3 }); allQueues.push(queue)
 
     // Add 10 consecutive inserts
     for (let i = 0; i < 10; i++) {
@@ -288,7 +295,7 @@ async function runTests() {
     console.log('\nTest 12: Queue statistics are accurate')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
 
     await queue.enqueue('doc1', { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }, 'client1', 0)
     await queue.enqueue('doc1', { type: 'insert', id: 'op2', value: 'b', after: 'op1' }, 'client1', 1)
@@ -315,7 +322,7 @@ async function runTests() {
     console.log('\nTest 13: Get queue length for specific document')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
 
     await queue.enqueue('doc1', { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }, 'client1', 0)
     await queue.enqueue('doc1', { type: 'insert', id: 'op2', value: 'b', after: 'op1' }, 'client1', 1)
@@ -335,7 +342,7 @@ async function runTests() {
     console.log('\nTest 14: Cleanup inactive queues')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
 
     await queue.enqueue('doc1', { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }, 'client1', 0)
     await queue.flush('doc1')
@@ -358,7 +365,7 @@ async function runTests() {
     console.log('\nTest 15: Handle multiple documents in parallel')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
 
     const promises = []
     for (let docNum = 0; docNum < 5; docNum++) {
@@ -391,7 +398,7 @@ async function runTests() {
     console.log('\nTest 16: Mix of inserts and deletes are not batched together')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
 
     await queue.enqueue('doc1', { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }, 'client1', 0)
     await queue.enqueue('doc1', { type: 'delete', id: 'op1' }, 'client1', 0)
@@ -412,7 +419,7 @@ async function runTests() {
     console.log('\nTest 17: Prevent concurrent processing of same queue')
 
     const storage = new MockStorage()
-    const queue = new OperationQueue(storage, { flushInterval: 10000 })
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
 
     await queue.enqueue('doc1', { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }, 'client1', 0)
     await queue.enqueue('doc1', { type: 'insert', id: 'op2', value: 'b', after: 'op1' }, 'client1', 1)
@@ -429,6 +436,97 @@ async function runTests() {
 
     console.log('✓ Concurrent processing prevention works')
     passedTests++
+  }
+
+  // Test 18: Mixed operation types produce multiple DB operations via saveOperationBatch
+  {
+    totalTests++
+    console.log('\nTest 18: Mixed ops from same client use saveOperationBatch correctly')
+
+    const storage = new MockStorage()
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
+
+    // insert, delete, insert — cannot be batched together (different types)
+    await queue.enqueue('doc1', { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }, 'client1', 0)
+    await queue.enqueue('doc1', { type: 'delete', id: 'op1' }, 'client1', 0)
+    await queue.enqueue('doc1', { type: 'insert', id: 'op2', value: 'b', after: 'ROOT' }, 'client1', 0)
+
+    await queue.flush('doc1')
+
+    assert.strictEqual(storage.operations.length, 3, 'Should save 3 separate operations via batch')
+    assert.strictEqual(storage.operations[0].op.type, 'insert', 'First op is insert')
+    assert.strictEqual(storage.operations[1].op.type, 'delete', 'Second op is delete')
+    assert.strictEqual(storage.operations[2].op.type, 'insert', 'Third op is insert')
+
+    const stats = queue.getStats()
+    assert.strictEqual(stats.totalProcessed, 3, 'All 3 ops processed')
+    assert.strictEqual(stats.errors, 0, 'No errors')
+
+    console.log('✓ Mixed operation types correctly saved via saveOperationBatch')
+    passedTests++
+  }
+
+  // Test 19: Error recovery does not cause infinite loop
+  {
+    totalTests++
+    console.log('\nTest 19: Error in storage does not cause infinite retry loop')
+
+    let callCount = 0
+    const errorStorage = {
+      saveOperation(docId, op) {
+        callCount++
+        if (callCount <= 2) throw new Error('Simulated DB error')
+        // Succeeds after 2 failures
+      },
+      saveOperationBatch(docId, ops) {
+        callCount++
+        throw new Error('Simulated batch error')
+      }
+    }
+
+    const queue = new OperationQueue(errorStorage, { flushInterval: 10000 }); allQueues.push(queue)
+
+    await queue.enqueue('doc1', { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }, 'client1', 0)
+
+    // First flush — should fail but NOT loop infinitely
+    await queue.flush('doc1')
+
+    const stats = queue.getStats()
+    assert.strictEqual(stats.errors, 1, 'Should record 1 error')
+    // Operations should be re-queued (not lost)
+    assert.ok(queue.getQueueLength('doc1') >= 1, 'Failed ops should be re-queued for retry')
+
+    console.log('✓ Error recovery does not cause infinite loop')
+    passedTests++
+  }
+
+  // Test 20: stop() clears all timers
+  {
+    totalTests++
+    console.log('\nTest 20: stop() clears background interval and flush timers')
+
+    const storage = new MockStorage()
+    const queue = new OperationQueue(storage, { flushInterval: 10000 }); allQueues.push(queue)
+
+    await queue.enqueue('doc1', { type: 'insert', id: 'op1', value: 'a', after: 'ROOT' }, 'client1', 0)
+
+    // Verify timer exists
+    const q = queue.queues.get('doc1')
+    assert.ok(q.timer !== null, 'Flush timer should be set')
+    assert.ok(queue._backgroundInterval !== null, 'Background interval should be set')
+
+    queue.stop()
+
+    assert.strictEqual(q.timer, null, 'Flush timer should be cleared after stop()')
+    assert.strictEqual(queue._backgroundInterval, null, 'Background interval should be cleared after stop()')
+
+    console.log('✓ stop() clears all timers correctly')
+    passedTests++
+  }
+
+  // Cleanup all queues to prevent process hang from background intervals
+  for (const q of allQueues) {
+    q.stop()
   }
 
   // Summary

@@ -106,38 +106,56 @@ class OperationQueue {
     queue.processing = true
 
     try {
-      // Process all queued operations in batches
-      while (queue.ops.length > 0) {
-        // Take operations from queue (up to maxBatchSize)
-        const opsToProcess = queue.ops.splice(0, this.maxBatchSize)
+      // Take all queued operations
+      const allOps = queue.ops.splice(0)
 
-        if (opsToProcess.length === 0) {
-          break
-        }
+      if (allOps.length === 0) {
+        return
+      }
+
+      // Process in batches of maxBatchSize
+      for (let start = 0; start < allOps.length; start += this.maxBatchSize) {
+        const opsToProcess = allOps.slice(start, start + this.maxBatchSize)
 
         // Group by client and operation type for batching
         const batches = this._createBatches(opsToProcess)
 
-        // Process each batch
+        // Collect all DB operations to save in a single transaction
+        const dbOps = []
+        const batchItems = [] // track which queue items each dbOp covers
         for (const batch of batches) {
-          try {
-            if (batch.ops.length === 1) {
-              // Single operation - save directly
-              await this._saveOperation(docId, batch.ops[0].op)
-            } else {
-              // Multiple operations - create batch
-              await this._saveBatch(docId, batch)
-            }
-
-            this.stats.totalProcessed += batch.ops.length
-            this.stats.totalBatches++
-          } catch (error) {
-            console.error(`[OperationQueue] Error processing batch for ${docId}:`, error)
-            this.stats.errors++
-
-            // Re-queue failed operations
-            queue.ops.unshift(...batch.ops)
+          if (batch.ops.length === 1) {
+            dbOps.push(batch.ops[0].op)
+          } else {
+            dbOps.push(this._createBatchedOp(batch))
           }
+          batchItems.push(batch.ops)
+        }
+
+        try {
+          // Write all operations in a single transaction
+          if (dbOps.length === 1) {
+            this.storage.saveOperation(docId, dbOps[0])
+          } else if (this.storage.saveOperationBatch) {
+            this.storage.saveOperationBatch(docId, dbOps)
+          } else {
+            // Fallback: save operations individually
+            for (const op of dbOps) {
+              this.storage.saveOperation(docId, op)
+            }
+          }
+
+          const totalOps = batchItems.reduce((sum, items) => sum + items.length, 0)
+          this.stats.totalProcessed += totalOps
+          this.stats.totalBatches += batches.length
+        } catch (error) {
+          console.error(`[OperationQueue] Error processing batch for ${docId}:`, error)
+          this.stats.errors++
+
+          // Re-queue failed operations at front (but only once — they'll be retried on next flush)
+          const allItems = batchItems.flat()
+          queue.ops.unshift(...allItems)
+          break  // Stop processing this batch — retry on next flush cycle
         }
       }
 
@@ -221,65 +239,32 @@ class OperationQueue {
   }
 
   /**
-   * Save single operation to storage
+   * Create a batched operation object from a batch of consecutive ops
    */
-  async _saveOperation(docId, op) {
-    return new Promise((resolve, reject) => {
-      try {
-        this.storage.saveOperation(docId, op)
-        resolve()
-      } catch (error) {
-        reject(error)
+  _createBatchedOp(batch) {
+    if (batch.type === 'insert') {
+      return {
+        type: 'insert_batch',
+        id: batch.ops.map(item => item.op.id).join(','),
+        value: batch.ops.map(item => item.op.value).join(''),
+        after: batch.ops[0].op.after,
+        count: batch.ops.length
       }
-    })
-  }
-
-  /**
-   * Save batched operations to storage
-   */
-  async _saveBatch(docId, batch) {
-    return new Promise((resolve, reject) => {
-      try {
-        if (batch.type === 'insert') {
-          // Create insert batch
-          const combinedValue = batch.ops.map(item => item.op.value).join('')
-          const opIds = batch.ops.map(item => item.op.id).join(',')
-          const firstOp = batch.ops[0].op
-
-          const batchedOp = {
-            type: 'insert_batch',
-            id: opIds,
-            value: combinedValue,
-            after: firstOp.after,
-            count: batch.ops.length
-          }
-
-          this.storage.saveOperation(docId, batchedOp)
-        } else if (batch.type === 'delete') {
-          // Create delete batch
-          const opIds = batch.ops.map(item => item.op.id).join(',')
-
-          const batchedOp = {
-            type: 'delete_batch',
-            id: opIds,
-            count: batch.ops.length
-          }
-
-          this.storage.saveOperation(docId, batchedOp)
-        }
-
-        resolve()
-      } catch (error) {
-        reject(error)
+    } else if (batch.type === 'delete') {
+      return {
+        type: 'delete_batch',
+        id: batch.ops.map(item => item.op.id).join(','),
+        count: batch.ops.length
       }
-    })
+    }
+    return batch.ops[0].op
   }
 
   /**
    * Background processor - flushes stale queues
    */
   _startBackgroundProcessor() {
-    setInterval(() => {
+    this._backgroundInterval = setInterval(() => {
       const now = Date.now()
       const staleThreshold = this.flushInterval * 2
 
@@ -361,6 +346,22 @@ class OperationQueue {
     }
 
     return cleanedCount
+  }
+
+  /**
+   * Stop the background processor and clear all timers
+   */
+  stop() {
+    if (this._backgroundInterval) {
+      clearInterval(this._backgroundInterval)
+      this._backgroundInterval = null
+    }
+    for (const [, queue] of this.queues.entries()) {
+      if (queue.timer) {
+        clearTimeout(queue.timer)
+        queue.timer = null
+      }
+    }
   }
 
   /**

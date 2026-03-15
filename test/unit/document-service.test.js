@@ -241,6 +241,46 @@ docService13a.applyOperation("doc1", { type: "insert", id: "2", value: "Q", afte
 const docService13b = new DocumentService(storage13)
 assertEquals(docService13b.getText("doc1"), "PQ", "new instance loads persisted operations")
 
+// Test 14: applyOperationWithBatching returns correct offset
+console.log("\n[Test 14] applyOperationWithBatching() - returns correct offset")
+const storage14 = new MockStorage()
+const docService14 = new DocumentService(storage14, { useAsyncQueue: false, enableBatching: false })
+docService14.loadDocument("doc14")
+const offset14a = docService14.applyOperationWithBatching("doc14",
+  { type: "insert", id: "1", value: "A", after: "ROOT" }, "client1")
+assertEquals(offset14a, 0, "first insert at offset 0")
+const offset14b = docService14.applyOperationWithBatching("doc14",
+  { type: "insert", id: "2", value: "B", after: "1" }, "client1")
+assertEquals(offset14b, 1, "second insert at offset 1")
+assertEquals(docService14.getText("doc14"), "AB", "text correct after batched ops")
+
+// Test 15: applyOperationWithBatching delete returns offset before deletion
+console.log("\n[Test 15] applyOperationWithBatching() - delete returns offset before delete")
+const storage15 = new MockStorage()
+const docService15 = new DocumentService(storage15, { useAsyncQueue: false, enableBatching: false })
+docService15.applyOperation("doc15", { type: "insert", id: "1", value: "A", after: "ROOT" })
+docService15.applyOperation("doc15", { type: "insert", id: "2", value: "B", after: "1" })
+docService15.applyOperation("doc15", { type: "insert", id: "3", value: "C", after: "2" })
+storage15.clear()
+const deleteOffset = docService15.applyOperationWithBatching("doc15",
+  { type: "delete", id: "2" }, "client1")
+assertEquals(deleteOffset, 1, "delete offset is position of deleted char")
+assertEquals(docService15.getText("doc15"), "AC", "text correct after delete")
+
+// Test 16: shouldCreateSnapshot resets after createSnapshot
+console.log("\n[Test 16] shouldCreateSnapshot resets after snapshot creation")
+const storage16 = new MockStorage()
+storage16.saveSnapshot = function(docId, content, ts) { this.snapshots.push({ doc_id: docId, content, created_at: ts || Date.now() }) }
+storage16.loadLatestSnapshot = function(docId) { const s = this.snapshots.filter(s => s.doc_id === docId); return s.length ? s[s.length-1] : null }
+storage16.loadOperationsSinceSnapshot = function(docId, ts) { return this.operations.filter(op => op.docId === docId && op.created_at > ts).map(op => ({ type: op.type, op_id: op.id, value: op.value, after_id: op.after, created_at: op.created_at })) }
+storage16.deleteOldOperations = function(docId, ts) { this.operations = this.operations.filter(op => !(op.docId === docId && op.created_at <= ts)) }
+storage16.getOperationCount = function(docId) { return this.operations.filter(op => op.docId === docId).length }
+const docService16 = new DocumentService(storage16, { useAsyncQueue: false, enableBatching: false })
+for (let i = 0; i < 101; i++) {
+  docService16.applyOperation("doc16", { type: "insert", id: `id${i}`, value: "x", after: i === 0 ? "ROOT" : `id${i-1}` })
+}
+assert(docService16.shouldCreateSnapshot("doc16", 100), "should need snapshot at 101 ops")
+
 // Summary
 console.log("\n" + "=".repeat(60))
 console.log("DocumentService Unit Tests Summary")

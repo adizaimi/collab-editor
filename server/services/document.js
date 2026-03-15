@@ -39,19 +39,18 @@ class DocumentService {
     // Check for snapshot first
     const snapshot = this.storage.loadLatestSnapshot(docId)
     if (snapshot) {
-      // With text-only snapshots, we need ALL operations to rebuild correctly
-      // Don't use snapshot text - it's just for validation/display
-      // Build CRDT from all remaining operations
-      const ops = this.storage.loadOperations(docId)
-      for (const r of ops) {
-        this._applyStoredOperation(crdt, r)
+      // Try to deserialize CRDT from snapshot (new format: serialized JSON)
+      try {
+        crdt = CRDTText.deserialize(snapshot.content)
+      } catch (e) {
+        // Fallback: old text-only snapshot format - rebuild CRDT from text
+        crdt = this._buildCRDTFromText(snapshot.content)
       }
 
-      // Validate that we got the right result
-      const text = crdt.getText()
-      if (ops.length === 0 && snapshot.content !== text) {
-        // No operations but snapshot doesn't match - rebuild from snapshot text
-        crdt = this._buildCRDTFromText(snapshot.content)
+      // Apply only operations that occurred after the snapshot
+      const recentOps = this.storage.loadOperationsSinceSnapshot(docId, snapshot.created_at)
+      for (const r of recentOps) {
+        this._applyStoredOperation(crdt, r)
       }
     } else {
       // No snapshot: load all operations
@@ -92,7 +91,7 @@ class DocumentService {
     } else if (r.type === "insert_batch") {
       // Expand batched inserts
       const ids = r.op_id.split(',')
-      const values = r.value.split('')
+      const values = Array.from(r.value)  // Use Array.from to handle multi-byte unicode correctly
       let afterId = r.after_id
 
       for (let i = 0; i < values.length; i++) {
@@ -188,24 +187,27 @@ class DocumentService {
       }
     }
 
-    // NEW: Store text only (not full CRDT) for massive space savings
-    const text = doc.getText()
+    // Compact CRDT to remove tombstones before serialization
+    const compactResult = doc.compact()
+    if (compactResult.removed > 0) {
+      console.log(`[Snapshot] Compacted ${docId}: removed ${compactResult.removed} tombstones (${compactResult.compressionRatio}% reduction)`)
+    }
+
+    // Store serialized CRDT state (preserves full structure for correct reload)
+    const serialized = doc.serialize()
     const timestamp = Date.now()
 
-    // Save new snapshot with explicit timestamp
-    this.storage.saveSnapshot(docId, text, timestamp)
+    // Save snapshot
+    this.storage.saveSnapshot(docId, serialized, timestamp)
 
-    // TODO: Implement smart operation archival
-    // For now, keep ALL operations to maintain CRDT integrity
-    // In production, we'd want to:
-    // 1. Keep operations from last 24 hours
-    // 2. Or keep last N operations
-    // 3. Periodically compact CRDT to remove old tombstones
+    // Archive old operations that are now captured in the snapshot
+    this.storage.deleteOldOperations(docId, timestamp)
 
     // Reset operation counter
     this.operationCounts.set(docId, 0)
 
     const opCount = this.storage.getOperationCount(docId)
+    const text = doc.getText()
     console.log(`[Snapshot] Created for ${docId}: ${text.length} chars, ${opCount} ops remaining`)
   }
 

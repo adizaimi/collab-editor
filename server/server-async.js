@@ -55,7 +55,7 @@ wss.on("connection",(ws,req)=>{
   // send full document text to new client
   ws.send(JSON.stringify({type:"init", text:docs.getText(docId)}))
 
-  ws.on("message", msg=>{
+  ws.on("message", async msg=>{
     let data
     try {
       data = JSON.parse(msg)
@@ -126,7 +126,7 @@ wss.on("connection",(ws,req)=>{
 
     // Check if snapshot needed based on operation count
     if(docs.shouldCreateSnapshot(docId, SNAPSHOT_THRESHOLD)){
-      createSnapshot(docId)
+      await createSnapshot(docId)
     }
   })
 })

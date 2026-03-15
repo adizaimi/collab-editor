@@ -15,7 +15,7 @@ A production-ready real-time collaborative document editor built with Node.js, W
 ### Production Optimizations
 - ✅ **Async Operation Queue (Default)**: 5-10x better burst handling, <10ms latency
 - ✅ **Operation Batching**: 90% reduction in database writes
-- ✅ **Smart Snapshots**: Text-only format (99% storage reduction)
+- ✅ **Smart Snapshots**: Serialized CRDT with automatic operation archival
 - ✅ **Operation Count Caching**: 50x faster threshold checks
 - ✅ **Memory Leak Prevention**: Automatic cleanup of inactive resources
 - ✅ **Iterative Tree Traversal**: No stack overflow on large documents
@@ -87,7 +87,7 @@ npm run test:all              # All tests including stress tests
 | SQLiteStorage | 42 assertions | ✅ |
 | OperationBuffer | 12 assertions | ✅ |
 | OperationQueue | 17 assertions | ✅ |
-| Snapshot System | 10 assertions | ✅ |
+| Snapshot System | 15 assertions | ✅ |
 | Server-Client E2E | 16 assertions | ✅ |
 | **Core Subtotal** | **180 assertions** | **✅** |
 | | | |
@@ -194,13 +194,16 @@ insert('a',0) + insert('b',1) + insert('c',2) → insert_batch('abc',0)
 delete(5) + delete(5) + delete(5) → delete_batch(5, count:3)
 ```
 
-**3. Text-Only Snapshots** (99% storage reduction)
+**3. Serialized CRDT Snapshots** (fast loading + operation archival)
 ```javascript
-// BEFORE: Store full CRDT with tombstones (758 KB)
-snapshot = serialize(CRDT)
+// Snapshot stores full CRDT state as JSON
+snapshot = doc.serialize()  // Nodes, links, tombstones
 
-// AFTER: Store only visible text (1 KB)
-snapshot = doc.getText()
+// On load: deserialize directly (no operation replay needed)
+crdt = CRDTText.deserialize(snapshot.content)
+
+// Old operations archived (deleted) after snapshot creation
+storage.deleteOldOperations(docId, snapshot.created_at)
 ```
 
 **4. Operation Count Caching** (50x faster)
@@ -290,11 +293,11 @@ CREATE TABLE operations (
 );
 CREATE INDEX idx_doc_operations ON operations(doc_id, created_at);
 
--- Snapshots table (text-only format)
+-- Snapshots table (serialized CRDT format)
 CREATE TABLE snapshots (
   id INTEGER PRIMARY KEY,
   doc_id TEXT,
-  content TEXT,            -- Plain text (not serialized CRDT)
+  content TEXT,            -- Serialized CRDT JSON (or plain text for legacy)
   created_at INTEGER
 );
 CREATE INDEX idx_doc_snapshots ON snapshots(doc_id, created_at DESC);

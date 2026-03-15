@@ -916,24 +916,31 @@ if (r.type === 'delete_batch') {
 
 ### Purpose
 
-Snapshots enable fast document loading and prevent unbounded operation growth.
+Snapshots enable fast document loading and prevent unbounded operation/database growth.
+When a snapshot is created, the full CRDT state is serialized to JSON and old operations
+are archived (deleted) from the database. On reload, the CRDT is deserialized directly
+from the snapshot and only operations created *after* the snapshot are replayed.
 
-### Snapshot Format (Text-Only)
+### Snapshot Format (Serialized CRDT)
 
 **Current Implementation:**
 ```javascript
 {
   doc_id: "mydoc",
-  content: "Hello World",        // Plain text (not serialized CRDT)
+  content: '{"root":"ROOT","chars":[...]}',  // Serialized CRDT (JSON)
   created_at: 1234567890
 }
 ```
 
-**Why Text-Only?**
-- 99% storage reduction (1 KB vs 758 KB for 1000-char doc with 9000 tombstones)
-- Fast to create and load
-- Human-readable
-- Maintains CRDT integrity via operations table
+The `content` field contains the output of `CRDTText.serialize()` — a JSON string
+encoding the full tree structure: all nodes, parent-child links, and tombstones
+(deleted characters). This allows the CRDT to be restored exactly via
+`CRDTText.deserialize()` without replaying any operations.
+
+**Backward Compatibility:**
+Old snapshots stored plain text (`"Hello World"`). On load, if `JSON.parse()` fails
+on the snapshot content, the system falls back to `_buildCRDTFromText()` which
+reconstructs a CRDT by inserting each character sequentially.
 
 ### Snapshot Creation
 
@@ -942,9 +949,8 @@ Triggered by:
 #### 1. Operation Count Threshold
 
 ```javascript
-// After each operation
-const opCount = this.operationCounts.get(docId) || 0
-if (opCount >= 100) {
+// After each operation (in server.js)
+if (docs.shouldCreateSnapshot(docId, 100)) {
   createSnapshot(docId)
 }
 ```
@@ -955,92 +961,95 @@ if (opCount >= 100) {
 // After 10 seconds of inactivity
 snapshotTimers.set(docId, setTimeout(() => {
   docs.flushBuffer(docId)  // Flush buffered operations first
-  // Optionally create snapshot (currently commented out)
 }, 10000))
 ```
 
 ### Snapshot Creation Process
 
 ```javascript
-createSnapshot(docId) {
+async createSnapshot(docId) {
   const doc = this.loadDocument(docId)
 
-  // 1. Flush operation buffer first
+  // 1. Flush operation buffer/queue
   if (this.buffer) {
-    this.buffer.flush(docId)
+    if (this.isAsync) await this.buffer.flush(docId)
+    else this.buffer.flush(docId)
   }
 
-  // 2. Get current text
-  const text = doc.getText()
+  // 2. Compact CRDT (removes tombstones, shrinks memory)
+  doc.compact()
 
-  // 3. Save to database
-  this.storage.saveSnapshot(docId, text, Date.now())
+  // 3. Serialize full CRDT state to JSON
+  const serialized = doc.serialize()
+  const timestamp = Date.now()
 
-  // 4. Reset operation counter
+  // 4. Save snapshot to database
+  this.storage.saveSnapshot(docId, serialized, timestamp)
+
+  // 5. Archive old operations (delete ops with created_at <= timestamp)
+  this.storage.deleteOldOperations(docId, timestamp)
+
+  // 6. Reset in-memory operation counter
   this.operationCounts.set(docId, 0)
-
-  // Note: Operations are kept for CRDT integrity
-  // Could implement smart archival in production
 }
 ```
 
 ### Document Loading with Snapshots
 
+```
+loadDocument(docId)
+│
+├── Already cached in this.docs? ──► Return cached CRDT
+│
+├── Snapshot exists in DB?
+│   ├── YES ──► Deserialize CRDT from snapshot JSON
+│   │           (fallback: _buildCRDTFromText for old text-only snapshots)
+│   │           Then: replay ONLY operations created after the snapshot
+│   │
+│   └── NO  ──► Load ALL operations, apply each to a fresh CRDT
+│
+└── Cache CRDT in this.docs Map, return it
+```
+
 ```javascript
 loadDocument(docId) {
-  if (this.docs.has(docId)) {
-    return this.docs.get(docId)  // Return cached
-  }
-
+  if (this.docs.has(docId)) return this.docs.get(docId)
   let crdt = new CRDTText()
 
-  // 1. Check for snapshot
   const snapshot = this.storage.loadLatestSnapshot(docId)
-
   if (snapshot) {
-    // 2. Load ALL operations (needed for CRDT integrity)
-    const ops = this.storage.loadOperations(docId)
-
-    // 3. Rebuild CRDT from operations
-    for (const r of ops) {
-      this._applyStoredOperation(crdt, r)
-    }
-
-    // 4. Validate (for empty docs or edge cases)
-    const text = crdt.getText()
-    if (ops.length === 0 && snapshot.content !== text) {
+    // Restore CRDT from serialized snapshot
+    try {
+      crdt = CRDTText.deserialize(snapshot.content)
+    } catch (e) {
+      // Old text-only format fallback
       crdt = this._buildCRDTFromText(snapshot.content)
     }
+
+    // Apply only operations that occurred after the snapshot
+    const recentOps = this.storage.loadOperationsSinceSnapshot(docId, snapshot.created_at)
+    for (const r of recentOps) {
+      this._applyStoredOperation(crdt, r)
+    }
   } else {
-    // No snapshot: load all operations
+    // No snapshot: load all operations from scratch
     const ops = this.storage.loadOperations(docId)
     for (const r of ops) {
       this._applyStoredOperation(crdt, r)
     }
   }
 
-  // 5. Cache in memory
   this.docs.set(docId, crdt)
   return crdt
 }
 ```
 
-### Why Keep Operations After Snapshot?
-
-**Reasons:**
-1. **CRDT Integrity**: Operations contain the true character relationships (parent-child)
-2. **Concurrent Edits**: New operations reference existing character IDs
-3. **Compaction Safety**: Can rebuild CRDT completely if needed
-
-**Future Optimization:**
-```javascript
-// Keep operations from last 24 hours
-const cutoffTime = Date.now() - (24 * 60 * 60 * 1000)
-this.storage.deleteOldOperations(docId, cutoffTime)
-
-// Or: Keep last N operations
-const recentOps = this.storage.getRecentOperations(docId, 1000)
-```
+**Safety guarantees:**
+- `CRDTText.insert()` is idempotent (`if(this.chars.has(id)) return`), so replaying
+  an operation already captured in the snapshot is harmless.
+- Old operations are only deleted *after* the snapshot is saved, so a crash during
+  snapshot creation leaves the system in a consistent state.
+- Compaction before serialization removes tombstones, keeping snapshot size bounded.
 
 ---
 

@@ -317,6 +317,59 @@ runTest("rapid insert/delete cycles", () => {
   console.log(`     INFO: 100 ops in ${duration}ms`)
 })
 
+// Test 11: Compact followed by new operations
+console.log("\n[Test 11] Compact + continued editing")
+runTest("operations work correctly after compact", () => {
+  const crdt = new CRDTText()
+  crdt.insert('A', 'ROOT', 'id1')
+  crdt.insert('B', 'id1', 'id2')
+  crdt.insert('C', 'id2', 'id3')
+  crdt.delete('id2') // Delete B -> "AC"
+
+  const result = crdt.compact()
+  // Before: ROOT + A + B(deleted) + C = 4 nodes. After: ROOT + A + C = 3 nodes. Removed = 1
+  assertEquals(result.removed, 1, "should remove 1 tombstone")
+
+  // Verify text preserved
+  assertEquals(crdt.getText(), 'AC', "text preserved after compact")
+
+  // Now insert new characters using compacted IDs
+  const aId = crdt.getIdAtOffset(0)
+  const cId = crdt.getIdAtOffset(1)
+
+  crdt.insert('X', aId, 'new1')
+  assertEquals(crdt.getText(), 'AXC', "insert after compact works")
+
+  crdt.insert('Y', cId, 'new2')
+  assertEquals(crdt.getText(), 'AXCY', "second insert after compact works")
+
+  crdt.delete('new1')
+  assertEquals(crdt.getText(), 'ACY', "delete after compact works")
+})
+
+runTest("double compact preserves text", () => {
+  const crdt = new CRDTText()
+  crdt.insert('H', 'ROOT', 'id1')
+  crdt.insert('I', 'id1', 'id2')
+
+  crdt.compact()
+  crdt.compact()
+
+  assertEquals(crdt.getText(), 'HI', "text preserved after double compact")
+  assertEquals(crdt.chars.size, 3, "should have ROOT + 2 chars")
+})
+
+// Test 12: getIdAtOffset edge cases with single character
+console.log("\n[Test 12] Edge case: single character document")
+runTest("operations on single char document", () => {
+  const crdt = new CRDTText()
+  crdt.insert('X', 'ROOT', 'id1')
+
+  assertEquals(crdt.getIdAtOffset(0), 'id1', "offset 0 returns the only char")
+  assertEquals(crdt.getIdAtOffset(1), 'ROOT', "offset beyond length returns ROOT")
+  assertEquals(crdt.getOffsetOfId('id1'), 0, "char is at offset 0")
+})
+
 console.log("\n" + "=".repeat(60))
 console.log("Additional CRDT Tests Summary")
 console.log("=".repeat(60))

@@ -5,6 +5,7 @@
 
 const SQLiteStorage = require('../../server/storage/sqlite')
 const DocumentService = require('../../server/services/document')
+const CRDTText = require('../../server/crdt/text')
 const fs = require('fs')
 const path = require('path')
 
@@ -25,7 +26,7 @@ function assert(condition, message) {
 
 function assertEquals(actual, expected, message) {
   if (actual !== expected) {
-    throw new Error(`${message}: expected ${expected}, got ${actual}`)
+    throw new Error(`${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
   }
 }
 
@@ -60,7 +61,7 @@ storage.init()
 
 // Test 1: Save and load snapshot
 console.log("\n[Test 1] Save and load snapshot")
-await await runTest("snapshot saves and loads correctly", () => {
+await runTest("snapshot saves and loads correctly", () => {
   storage.saveSnapshot('doc1', 'Hello World')
 
   const snapshot = storage.loadLatestSnapshot('doc1')
@@ -159,17 +160,16 @@ await runTest("counts operations correctly", () => {
   assertEquals(count, 3, "should count all operations")
 })
 
-// Test 6: DocumentService creates snapshot
-console.log("\n[Test 6] DocumentService creates snapshot and archives operations")
-await runTest("document service creates snapshot", async () => {
-  // Use a separate storage for this test
+// Test 6: DocumentService creates snapshot with serialized CRDT
+console.log("\n[Test 6] DocumentService creates snapshot with serialized CRDT and archives operations")
+await runTest("document service creates snapshot and archives ops", async () => {
   const testStorage = new SQLiteStorage()
   testStorage.db = require('better-sqlite3')(':memory:')
   testStorage.init()
 
-  const docService = new DocumentService(testStorage, false) // Disable batching for this test
+  const docService = new DocumentService(testStorage, false)
 
-  // Add operations (wait between them to ensure different timestamps)
+  // Add operations
   docService.applyOperation('doc6', { type: 'insert', id: 'id1', value: 'H', after: 'ROOT' })
   const now1 = Date.now()
   while (Date.now() === now1) { /* wait */ }
@@ -177,26 +177,26 @@ await runTest("document service creates snapshot", async () => {
   const now2 = Date.now()
   while (Date.now() === now2) { /* wait */ }
 
-  // Create snapshot (now async)
+  // Create snapshot
   await docService.createSnapshot('doc6')
 
   // Verify snapshot exists
   const snapshot = testStorage.loadLatestSnapshot('doc6')
   assert(snapshot !== null && snapshot !== undefined, "snapshot should be created")
 
-  // Verify snapshot contains plain text (NEW FORMAT)
-  assertEquals(snapshot.content, 'Hi', "snapshot should contain plain text")
+  // Verify snapshot contains serialized CRDT (JSON)
+  const parsed = JSON.parse(snapshot.content)
+  assert(parsed.root === 'ROOT', "snapshot should contain serialized CRDT with root")
+  assert(Array.isArray(parsed.chars), "snapshot should contain chars array")
 
-  // NOTE: With text-only snapshots, we keep operations for CRDT reconstruction
-  // Operations are NOT deleted to maintain referential integrity
+  // Verify old operations were archived (deleted)
   const ops = testStorage.loadOperations('doc6')
-  assert(ops.length >= 0, "operations may be kept for CRDT integrity")
+  assertEquals(ops.length, 0, "old operations should be archived after snapshot")
 })
 
 // Test 7: Load document from snapshot
 console.log("\n[Test 7] DocumentService loads document from snapshot")
-await runTest("loads document from snapshot", async () => {
-  // Use a separate storage for this test
+await runTest("loads document from snapshot + recent ops", async () => {
   const testStorage = new SQLiteStorage()
   testStorage.db = require('better-sqlite3')(':memory:')
   testStorage.init()
@@ -212,21 +212,19 @@ await runTest("loads document from snapshot", async () => {
   let now = Date.now()
   while (Date.now() - now < 5) { /* wait 5ms */ }
 
-  // Create snapshot (now async)
+  // Create snapshot (archives old ops)
   await docService1.createSnapshot('doc7')
-  const snapshot = testStorage.loadLatestSnapshot('doc7')
 
   // Wait to ensure new operation has later timestamp than snapshot
   now = Date.now()
   while (Date.now() - now < 5) { /* wait 5ms */ }
 
-  // Add more operations after snapshot
-  docService1.applyOperation('doc7', { type: 'insert', id: 'id4', value: '!', after: 'id3' })
+  // After snapshot+compact, old IDs are replaced. Look up current ID at offset 2 (end of "Hey")
+  const crdt7 = docService1.getCRDT('doc7')
+  const afterId = crdt7.getIdAtOffset(2) // ID of 'y' in compacted CRDT
 
-  // Verify operation was saved with timestamp after snapshot
-  const allOps = testStorage.loadOperations('doc7')
-  const recentOps = testStorage.loadOperationsSinceSnapshot('doc7', snapshot.created_at)
-  assert(recentOps.length > 0, `should have operations after snapshot (snapshot: ${snapshot.created_at}, ops: ${JSON.stringify(allOps.map(o => o.created_at))})`)
+  // Add operation using current ID (simulates real server flow)
+  docService1.applyOperation('doc7', { type: 'insert', id: 'id4', value: '!', after: afterId })
 
   // Create new service instance (simulates server restart)
   const docService2 = new DocumentService(testStorage, false)
@@ -314,6 +312,200 @@ await runTest("batched deletes expand on load", () => {
   const docService2 = new DocumentService(testStorage, false)
   const text = docService2.getText('doc10')
   assertEquals(text, 'c', "should expand batched delete correctly")
+})
+
+// Test 11: Snapshot + archive cycle preserves document integrity
+console.log("\n[Test 11] Snapshot archive cycle preserves document across multiple snapshots")
+await runTest("multiple snapshot cycles preserve document", async () => {
+  const testStorage = new SQLiteStorage()
+  testStorage.db = require('better-sqlite3')(':memory:')
+  testStorage.init()
+
+  const docService = new DocumentService(testStorage, false)
+
+  // Build document
+  docService.applyOperation('doc11', { type: 'insert', id: 'a1', value: 'A', after: 'ROOT' })
+  docService.applyOperation('doc11', { type: 'insert', id: 'b1', value: 'B', after: 'a1' })
+
+  let now = Date.now()
+  while (Date.now() - now < 5) {}
+
+  // First snapshot
+  await docService.createSnapshot('doc11')
+  assertEquals(testStorage.getOperationCount('doc11'), 0, "ops should be archived after 1st snapshot")
+
+  now = Date.now()
+  while (Date.now() - now < 5) {}
+
+  // After compact, look up current IDs
+  const crdt11 = docService.getCRDT('doc11')
+  const afterBId = crdt11.getIdAtOffset(1) // ID of 'B' in compacted CRDT
+  const aId = crdt11.getIdAtOffset(0) // ID of 'A' in compacted CRDT
+
+  // More edits using current IDs
+  docService.applyOperation('doc11', { type: 'insert', id: 'c1', value: 'C', after: afterBId })
+  docService.applyOperation('doc11', { type: 'delete', id: aId })
+
+  now = Date.now()
+  while (Date.now() - now < 5) {}
+
+  // Second snapshot
+  await docService.createSnapshot('doc11')
+  assertEquals(testStorage.getOperationCount('doc11'), 0, "ops should be archived after 2nd snapshot")
+
+  // Simulate restart
+  const docService2 = new DocumentService(testStorage, false)
+  const text = docService2.getText('doc11')
+  assertEquals(text, 'BC', "document should be correct after multiple snapshot cycles")
+})
+
+// Test 12: Backward compatibility with text-only snapshots
+console.log("\n[Test 12] Backward compatibility with text-only (non-CRDT) snapshots")
+await runTest("loads from text-only snapshot fallback", () => {
+  const testStorage = new SQLiteStorage()
+  testStorage.db = require('better-sqlite3')(':memory:')
+  testStorage.init()
+
+  // Manually save a text-only snapshot (old format)
+  testStorage.saveSnapshot('doc12', 'Hello old format')
+
+  const docService = new DocumentService(testStorage, false)
+  const text = docService.getText('doc12')
+  assertEquals(text, 'Hello old format', "should load from text-only snapshot via fallback")
+})
+
+// Test 13: CRDT serialize/deserialize roundtrip
+console.log("\n[Test 13] CRDT serialize/deserialize roundtrip")
+await runTest("CRDT roundtrip preserves text and structure", () => {
+  const crdt = new CRDTText()
+  crdt.insert('H', 'ROOT', 'id1')
+  crdt.insert('e', 'id1', 'id2')
+  crdt.insert('l', 'id2', 'id3')
+  crdt.insert('l', 'id3', 'id4')
+  crdt.insert('o', 'id4', 'id5')
+
+  const serialized = crdt.serialize()
+  const restored = CRDTText.deserialize(serialized)
+
+  assertEquals(restored.getText(), 'Hello', "deserialized CRDT should produce same text")
+  assertEquals(restored.chars.size, crdt.chars.size, "deserialized CRDT should have same char count")
+
+  // Verify new operations work on deserialized CRDT
+  restored.insert('!', 'id5', 'id6')
+  assertEquals(restored.getText(), 'Hello!', "should be able to insert after deserialize")
+})
+
+// Test 14: CRDT serialize/deserialize preserves deletions
+console.log("\n[Test 14] CRDT serialize/deserialize preserves deletions (tombstones)")
+await runTest("CRDT roundtrip preserves tombstones", () => {
+  const crdt = new CRDTText()
+  crdt.insert('a', 'ROOT', 'id1')
+  crdt.insert('b', 'id1', 'id2')
+  crdt.insert('c', 'id2', 'id3')
+  crdt.delete('id2') // delete 'b'
+
+  const serialized = crdt.serialize()
+  const restored = CRDTText.deserialize(serialized)
+
+  assertEquals(restored.getText(), 'ac', "deserialized should reflect deletions")
+
+  // Deleting same ID again should be safe (idempotent)
+  restored.delete('id2')
+  assertEquals(restored.getText(), 'ac', "double delete should be safe")
+})
+
+// Test 15: CRDT compact
+console.log("\n[Test 15] CRDT compact removes tombstones")
+await runTest("compact removes deleted nodes", () => {
+  const crdt = new CRDTText()
+  crdt.insert('a', 'ROOT', 'id1')
+  crdt.insert('b', 'id1', 'id2')
+  crdt.insert('c', 'id2', 'id3')
+  crdt.delete('id2')
+
+  const sizeBefore = crdt.chars.size
+  const result = crdt.compact()
+
+  assertEquals(crdt.getText(), 'ac', "text should be preserved after compact")
+  assert(result.newSize < sizeBefore, "compacted CRDT should have fewer nodes")
+  assert(result.removed > 0, "compact should remove at least one node")
+})
+
+// Test 16: Unicode emoji in batched operations expand correctly
+console.log("\n[Test 16] Unicode emoji in batched insert operations")
+await runTest("batched insert with emoji expands correctly", () => {
+  const testStorage = new SQLiteStorage()
+  testStorage.db = require('better-sqlite3')(':memory:')
+  testStorage.init()
+
+  // Save a batched op where one value is an emoji (multi-byte)
+  testStorage.saveOperation('doc16', {
+    type: 'insert_batch',
+    id: 'id1,id2,id3',
+    value: '😀AB',
+    after: 'ROOT'
+  })
+
+  const docService = new DocumentService(testStorage, false)
+  const text = docService.getText('doc16')
+  assertEquals(text, '😀AB', "should correctly expand batched insert with emoji")
+})
+
+// Test 17: Snapshot compact invalidates old IDs - new ops must use new IDs
+console.log("\n[Test 17] Operations after snapshot compact use compacted IDs")
+await runTest("post-compact operations use valid IDs", async () => {
+  const testStorage = new SQLiteStorage()
+  testStorage.db = require('better-sqlite3')(':memory:')
+  testStorage.init()
+
+  const docService = new DocumentService(testStorage, false)
+
+  // Build document
+  docService.applyOperation('doc17', { type: 'insert', id: 'id1', value: 'X', after: 'ROOT' })
+  docService.applyOperation('doc17', { type: 'insert', id: 'id2', value: 'Y', after: 'id1' })
+
+  // Snapshot compacts CRDT, old IDs gone
+  await docService.createSnapshot('doc17')
+
+  // Wait to ensure new operation has a later timestamp than the snapshot
+  let now17 = Date.now()
+  while (Date.now() - now17 < 5) { /* wait 5ms */ }
+
+  const crdt = docService.getCRDT('doc17')
+  // Old IDs should NOT exist
+  assert(!crdt.chars.has('id1'), "old id1 should not exist after compact")
+  assert(!crdt.chars.has('id2'), "old id2 should not exist after compact")
+
+  // Must look up current IDs
+  const afterId = crdt.getIdAtOffset(1) // current ID of 'Y'
+  assert(afterId !== 'ROOT', "should find a valid ID at offset 1")
+
+  docService.applyOperation('doc17', { type: 'insert', id: 'id3', value: 'Z', after: afterId })
+  assertEquals(docService.getText('doc17'), 'XYZ', "insert with new ID after compact works")
+
+  // Simulate restart - verify persistence
+  const docService2 = new DocumentService(testStorage, false)
+  assertEquals(docService2.getText('doc17'), 'XYZ', "document correct after restart")
+})
+
+// Test 18: _buildCRDTFromText fallback for old snapshot format
+console.log("\n[Test 18] _buildCRDTFromText builds working CRDT from plain text")
+await runTest("text-only snapshot allows continued editing", () => {
+  const testStorage = new SQLiteStorage()
+  testStorage.db = require('better-sqlite3')(':memory:')
+  testStorage.init()
+
+  // Save old-format (plain text) snapshot
+  testStorage.saveSnapshot('doc18', 'Hello')
+
+  const docService = new DocumentService(testStorage, false)
+  assertEquals(docService.getText('doc18'), 'Hello', "loads text-only snapshot")
+
+  // Verify we can continue editing on top of it
+  const crdt = docService.getCRDT('doc18')
+  const afterH = crdt.getIdAtOffset(0)
+  docService.applyOperation('doc18', { type: 'insert', id: 'new1', value: 'X', after: afterH })
+  assertEquals(docService.getText('doc18'), 'HXello', "can insert into text-built CRDT")
 })
 
 console.log("\n" + "=".repeat(60))
