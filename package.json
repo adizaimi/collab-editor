@@ -25,7 +25,11 @@
     "test:stress:multidoc": "node test/stress/multi-document-concurrent.test.js",
     "test:all": "npm test && npm run test:unit:additional && npm run test:unit:large && npm run test:stress:concurrent",
     "start": "node server/server.js",
-    "start:async": "node server/server-async.js"
+    "start:async": "node server/server-async.js",
+    "metrics": "node server/metrics/metrics-cli.js",
+    "metrics:summary": "node server/metrics/metrics-cli.js summary",
+    "metrics:top": "node server/metrics/metrics-cli.js top",
+    "metrics:breakdown": "node server/metrics/metrics-cli.js breakdown"
   },
   "keywords": [],
   "author": "",
