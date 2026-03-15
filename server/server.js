@@ -94,6 +94,18 @@ function parseTimeRange(timeStr) {
   }
 }
 
+// Document list endpoint
+app.get('/api/documents', (req, res) => {
+  const docs_list = storage.listDocuments()
+  // Include active user count per document
+  const result = docs_list.map(d => ({
+    id: d.doc_id,
+    lastUpdated: d.last_updated,
+    activeUsers: docUsers.has(d.doc_id) ? docUsers.get(d.doc_id).size : 0
+  }))
+  res.json(result)
+})
+
 const server = http.createServer(app)
 const wss = new WebSocket.Server({ server })
 

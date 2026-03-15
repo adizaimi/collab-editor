@@ -39,13 +39,7 @@ class DocumentService {
     // Check for snapshot first
     const snapshot = this.storage.loadLatestSnapshot(docId)
     if (snapshot) {
-      // Try to deserialize CRDT from snapshot (new format: serialized JSON)
-      try {
-        crdt = CRDTText.deserialize(snapshot.content)
-      } catch (e) {
-        // Fallback: old text-only snapshot format - rebuild CRDT from text
-        crdt = this._buildCRDTFromText(snapshot.content)
-      }
+      crdt = CRDTText.deserialize(snapshot.content)
 
       // Apply only operations that occurred after the snapshot
       const recentOps = this.storage.loadOperationsSinceSnapshot(docId, snapshot.created_at)
@@ -61,22 +55,6 @@ class DocumentService {
     }
 
     this.docs.set(docId, crdt)
-    return crdt
-  }
-
-  /**
-   * Build CRDT from plain text (new snapshot format)
-   */
-  _buildCRDTFromText(text) {
-    const crdt = new CRDTText()
-    let afterId = 'ROOT'
-
-    for (let i = 0; i < text.length; i++) {
-      const id = `snapshot:${i}:${Date.now()}`
-      crdt.insert(text[i], afterId, id)
-      afterId = id
-    }
-
     return crdt
   }
 

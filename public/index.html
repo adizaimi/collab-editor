@@ -74,11 +74,43 @@ body { font-family:sans-serif; padding:20px 40px; box-sizing:border-box; display
   text-align:right; font-size:12px; color:#888;
   margin-top:4px; font-family:monospace;
 }
+
+#doc-bar {
+  display:flex; align-items:center; gap:8px; margin-bottom:10px;
+  font-size:13px; flex-wrap:wrap;
+}
+#doc-bar .label { font-weight:600; color:#333; }
+#doc-list { display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+.doc-link {
+  display:inline-block; padding:2px 10px; border-radius:4px;
+  text-decoration:none; color:#0366d6; font-size:12px;
+  border:1px solid #ddd; background:#fafafa; cursor:pointer;
+  transition: background .1s, border-color .1s;
+}
+.doc-link:hover { background:#e8f0fe; border-color:#80b0ff; }
+.doc-link.active { background:#d0e0ff; border-color:#80b0ff; font-weight:600; }
+.doc-link .doc-users { font-size:10px; color:#888; margin-left:4px; }
+#new-doc-input {
+  border:1px solid #ddd; border-radius:4px; padding:2px 6px;
+  font-size:12px; width:100px; outline:none;
+}
+#new-doc-input:focus { border-color:#80b0ff; }
+#new-doc-btn {
+  border:1px solid #ddd; border-radius:4px; padding:2px 8px;
+  font-size:12px; cursor:pointer; background:#fafafa;
+}
+#new-doc-btn:hover { background:#e8e8e8; }
 </style>
 </head>
 <body>
 
 <h2>CRDT Collaborative Editor</h2>
+<div id="doc-bar">
+  <span class="label">Documents:</span>
+  <span id="doc-list"></span>
+  <input id="new-doc-input" placeholder="new doc name" />
+  <button id="new-doc-btn">+ New</button>
+</div>
 <div id="toolbar">
   <div id="status" class="connecting">Connecting...</div>
   <div id="format-bar">
@@ -905,7 +937,46 @@ editor.addEventListener("input", e => {
   updateLocation()
 })
 
+// --- Document list ---
+
+const docListEl = document.getElementById("doc-list")
+const newDocInput = document.getElementById("new-doc-input")
+const newDocBtn = document.getElementById("new-doc-btn")
+
+function fetchDocList() {
+  fetch("/api/documents")
+    .then(r => r.json())
+    .then(docs => renderDocList(docs))
+    .catch(() => {})
+}
+
+function renderDocList(docs) {
+  // Ensure current doc is in the list
+  const ids = new Set(docs.map(d => d.id))
+  if (!ids.has(docId)) {
+    docs.unshift({ id: docId, lastUpdated: Date.now(), activeUsers: 0 })
+  }
+
+  docListEl.innerHTML = docs.map(d => {
+    const active = d.id === docId ? " active" : ""
+    const users = d.activeUsers > 0 ? '<span class="doc-users">(' + d.activeUsers + ')</span>' : ""
+    return '<a class="doc-link' + active + '" href="?doc=' + encodeURIComponent(d.id) + '">' +
+      escapeHtml(d.id) + users + '</a>'
+  }).join("")
+}
+
+newDocBtn.addEventListener("click", () => {
+  const name = newDocInput.value.trim()
+  if (name) window.location.href = "?doc=" + encodeURIComponent(name)
+})
+newDocInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") newDocBtn.click()
+})
+
 connect()
+fetchDocList()
+// Refresh doc list periodically to show new docs and user counts
+setInterval(fetchDocList, 10000)
 </script>
 
 </body>

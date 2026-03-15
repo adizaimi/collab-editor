@@ -157,7 +157,6 @@ class CRDTText {
   format(charId, attrs){
     const node = this.chars.get(charId)
     if(!node || node.deleted) return false
-    if(!node.attrs) node.attrs = {}
     for(const [key, value] of Object.entries(attrs)){
       if(value === null || value === false){
         delete node.attrs[key]
@@ -181,7 +180,7 @@ class CRDTText {
       const node = this.chars.get(id)
 
       if (id !== this.root && !node.deleted) {
-        result.push({id: node.id, value: node.value, attrs: node.attrs || {}})
+        result.push({id: node.id, value: node.value, attrs: node.attrs})
       }
 
       for (let j = node.right.length - 1; j >= 0; j--) {

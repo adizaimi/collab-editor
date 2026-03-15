@@ -66,6 +66,16 @@ class SQLiteStorage {
       `),
       countOps: this.db.prepare(`
         SELECT COUNT(*) as count FROM operations WHERE doc_id=?
+      `),
+      listDocs: this.db.prepare(`
+        SELECT doc_id, MAX(created_at) as last_updated
+        FROM (
+          SELECT doc_id, created_at FROM operations
+          UNION ALL
+          SELECT doc_id, created_at FROM snapshots
+        )
+        GROUP BY doc_id
+        ORDER BY last_updated DESC
       `)
     }
 
@@ -118,6 +128,10 @@ class SQLiteStorage {
   getOperationCount(docId){
     const result = this._stmts.countOps.get(docId)
     return result.count
+  }
+
+  listDocuments(){
+    return this._stmts.listDocs.all()
   }
 
   close(){

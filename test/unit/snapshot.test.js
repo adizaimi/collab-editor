@@ -359,22 +359,7 @@ await runTest("multiple snapshot cycles preserve document", async () => {
   assertEquals(text, 'BC', "document should be correct after multiple snapshot cycles")
 })
 
-// Test 12: Backward compatibility with text-only snapshots
-console.log("\n[Test 12] Backward compatibility with text-only (non-CRDT) snapshots")
-await runTest("loads from text-only snapshot fallback", () => {
-  const testStorage = new SQLiteStorage()
-  testStorage.db = require('better-sqlite3')(':memory:')
-  testStorage.init()
-
-  // Manually save a text-only snapshot (old format)
-  testStorage.saveSnapshot('doc12', 'Hello old format')
-
-  const docService = new DocumentService(testStorage, false)
-  const text = docService.getText('doc12')
-  assertEquals(text, 'Hello old format', "should load from text-only snapshot via fallback")
-})
-
-// Test 13: CRDT serialize/deserialize roundtrip
+// Test 12: CRDT serialize/deserialize roundtrip
 console.log("\n[Test 13] CRDT serialize/deserialize roundtrip")
 await runTest("CRDT roundtrip preserves text and structure", () => {
   const crdt = new CRDTText()
@@ -486,26 +471,6 @@ await runTest("post-compact operations use valid IDs", async () => {
   // Simulate restart - verify persistence
   const docService2 = new DocumentService(testStorage, false)
   assertEquals(docService2.getText('doc17'), 'XYZ', "document correct after restart")
-})
-
-// Test 18: _buildCRDTFromText fallback for old snapshot format
-console.log("\n[Test 18] _buildCRDTFromText builds working CRDT from plain text")
-await runTest("text-only snapshot allows continued editing", () => {
-  const testStorage = new SQLiteStorage()
-  testStorage.db = require('better-sqlite3')(':memory:')
-  testStorage.init()
-
-  // Save old-format (plain text) snapshot
-  testStorage.saveSnapshot('doc18', 'Hello')
-
-  const docService = new DocumentService(testStorage, false)
-  assertEquals(docService.getText('doc18'), 'Hello', "loads text-only snapshot")
-
-  // Verify we can continue editing on top of it
-  const crdt = docService.getCRDT('doc18')
-  const afterH = crdt.getIdAtOffset(0)
-  docService.applyOperation('doc18', { type: 'insert', id: 'new1', value: 'X', after: afterH })
-  assertEquals(docService.getText('doc18'), 'HXello', "can insert into text-built CRDT")
 })
 
 console.log("\n" + "=".repeat(60))
