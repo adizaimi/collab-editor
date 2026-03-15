@@ -233,6 +233,10 @@ class OperationQueue {
       const isSameOffset = actualOffset === batch.lastOffset
       const isBackspace = actualOffset === batch.lastOffset - 1
       return isSameOffset || isBackspace
+    } else if (op.type === 'format') {
+      // Format ops with same attrs can be batched together
+      const lastOp = batch.ops[batch.ops.length - 1].op
+      return JSON.stringify(lastOp.attrs) === JSON.stringify(op.attrs)
     }
 
     return false
@@ -254,6 +258,13 @@ class OperationQueue {
       return {
         type: 'delete_batch',
         id: batch.ops.map(item => item.op.id).join(','),
+        count: batch.ops.length
+      }
+    } else if (batch.type === 'format') {
+      return {
+        type: 'format_batch',
+        id: batch.ops.map(item => item.op.id).join(','),
+        attrs: batch.ops[0].op.attrs,
         count: batch.ops.length
       }
     }

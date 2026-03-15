@@ -84,10 +84,13 @@ class DocumentService {
    * Apply a stored operation to CRDT, expanding batched operations
    */
   _applyStoredOperation(crdt, r) {
+    const attrs = r.attrs ? JSON.parse(r.attrs) : null
     if (r.type === "insert") {
-      crdt.insert(r.value, r.after_id, r.op_id)
+      crdt.insert(r.value, r.after_id, r.op_id, attrs)
     } else if (r.type === "delete") {
       crdt.delete(r.op_id)
+    } else if (r.type === "format") {
+      if (attrs) crdt.format(r.op_id, attrs)
     } else if (r.type === "insert_batch") {
       // Expand batched inserts
       const ids = r.op_id.split(',')
@@ -104,13 +107,20 @@ class DocumentService {
       for (const id of ids) {
         crdt.delete(id)
       }
+    } else if (r.type === "format_batch") {
+      // Expand batched formats
+      const ids = r.op_id.split(',')
+      for (const id of ids) {
+        if (attrs) crdt.format(id, attrs)
+      }
     }
   }
 
   applyOperation(docId, op){
     const doc = this.loadDocument(docId)
-    if(op.type==="insert") doc.insert(op.value, op.after, op.id)
+    if(op.type==="insert") doc.insert(op.value, op.after, op.id, op.attrs)
     if(op.type==="delete") doc.delete(op.id)
+    if(op.type==="format") doc.format(op.id, op.attrs)
     this.storage.saveOperation(docId, op)
 
     // Increment operation counter (for snapshot threshold tracking)
@@ -136,12 +146,15 @@ class DocumentService {
 
     // Apply to CRDT immediately (for real-time UI)
     if(op.type==="insert") {
-      doc.insert(op.value, op.after, op.id)
+      doc.insert(op.value, op.after, op.id, op.attrs)
       // For inserts, get offset after insertion
       actualOffset = doc.getOffsetOfId(op.id)
     }
     if(op.type==="delete") {
       doc.delete(op.id)
+    }
+    if(op.type==="format") {
+      doc.format(op.id, op.attrs)
     }
 
     // Add to buffer/queue or save directly
@@ -168,8 +181,44 @@ class DocumentService {
     return this.loadDocument(docId).getText()
   }
 
+  getFormattedChars(docId){
+    return this.loadDocument(docId).getFormattedChars()
+  }
+
   getCRDT(docId){
     return this.loadDocument(docId)
+  }
+
+  /**
+   * Apply a format operation to a range of characters
+   * @param {string} docId - Document ID
+   * @param {string[]} charIds - IDs of characters to format
+   * @param {object} attrs - Attributes to apply
+   * @param {string} clientId - Client who initiated the operation
+   */
+  applyFormatWithBatching(docId, charIds, attrs, clientId){
+    const doc = this.loadDocument(docId)
+
+    // Apply to CRDT immediately
+    for(const charId of charIds){
+      doc.format(charId, attrs)
+    }
+
+    // Save as format operations
+    for(const charId of charIds){
+      const op = {type: "format", id: charId, attrs}
+      if (this.buffer) {
+        if (this.isAsync) {
+          this.buffer.enqueue(docId, op, clientId)
+        } else {
+          this.buffer.addOperation(docId, op, clientId)
+        }
+      } else {
+        this.storage.saveOperation(docId, op)
+      }
+    }
+
+    this.operationCounts.set(docId, (this.operationCounts.get(docId) || 0) + charIds.length)
   }
 
   /**

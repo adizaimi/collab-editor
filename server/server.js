@@ -197,9 +197,10 @@ wss.on("connection",(ws,req)=>{
   metrics.record('connections.active', wss.clients.size)
   metrics.increment('connections.by_document', { doc_id: docId })
 
-  // Send full document text, assigned userId/color, and user list to new client
+  // Send full document text, formatted chars, assigned userId/color, and user list to new client
   const text = docs.getText(docId)
-  ws.send(JSON.stringify({type:"init", text, userId, color, users: getUsersForDoc(docId)}))
+  const formattedChars = docs.getFormattedChars(docId)
+  ws.send(JSON.stringify({type:"init", text, formattedChars, userId, color, users: getUsersForDoc(docId)}))
 
   // Track document size metrics
   metrics.record('document.text_length', text.length, { doc_id: docId })
@@ -277,6 +278,29 @@ wss.on("connection",(ws,req)=>{
       docs.applyOperationWithBatching(docId, op, data.clientId, offsetBeforeDelete)
 
       broadcastOp = {type:"delete", offset: offsetBeforeDelete, clientId:data.clientId}
+    }
+
+    if(data.type==="format"){
+      // Format a range of characters (offset-based from client)
+      const chars = crdt.getVisibleChars()
+      const startOffset = data.offset
+      const endOffset = data.endOffset !== undefined ? data.endOffset : data.offset + 1
+
+      const charIds = []
+      for(let i = startOffset; i < endOffset && i < chars.length; i++){
+        charIds.push(chars[i].id)
+      }
+
+      if(charIds.length > 0){
+        docs.applyFormatWithBatching(docId, charIds, data.attrs, data.clientId)
+        broadcastOp = {
+          type: "format",
+          offset: startOffset,
+          endOffset: endOffset,
+          attrs: data.attrs,
+          clientId: data.clientId
+        }
+      }
     }
 
     if(broadcastOp){
