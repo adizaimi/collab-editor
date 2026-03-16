@@ -529,7 +529,12 @@ function renderRemoteCursors() {
         const range = document.createRange()
         range.setStart(caretPos.node, caretPos.offset)
         range.collapse(true)
-        const rect = range.getClientRects()[0] || range.getBoundingClientRect()
+        let rect = range.getClientRects()[0] || range.getBoundingClientRect()
+        if (!rect || rect.height === 0) {
+          // Empty line (<div><br></div>) — fall back to parent element rect
+          const parentEl = caretPos.node.nodeType === Node.TEXT_NODE ? caretPos.node.parentNode : caretPos.node
+          rect = parentEl.getBoundingClientRect()
+        }
         if (rect && rect.height > 0) {
           const caret = document.createElement('div')
           caret.className = 'remote-cursor'

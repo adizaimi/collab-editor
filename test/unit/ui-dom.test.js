@@ -944,6 +944,19 @@ runTest("Remote cursor: no cursor at offset 0 when no selection", () => {
   assert(carets[0].dataset.offset === '0', "offset is 0")
 })
 
+runTest("Remote cursor: cursor rendered on empty line", () => {
+  const env = createCursorEnv()
+  // "Hello\n\nWorld" — line 2 is empty (offset 6 is the empty line after first \n)
+  env.renderEditor(makeChars("Hello\n\nWorld"))
+  const cursors = { user2: { offset: 6, selEnd: 6, color: '#1E88E5' } }
+  env.renderRemoteCursors(cursors, 'user1')
+
+  const carets = env.cursorOverlay.querySelectorAll('.remote-cursor')
+  assert(carets.length === 1, "cursor rendered on empty line")
+  assert(carets[0].dataset.offset === '6', "cursor offset is 6 (empty line)")
+  assert(carets[0].dataset.userId === 'user2', "cursor belongs to user2")
+})
+
 // ============================================================
 // Summary
 // ============================================================
