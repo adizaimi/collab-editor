@@ -264,14 +264,22 @@ wss.on("connection",(ws,req)=>{
       const chars = Array.from(data.value) // handles multi-char paste + multi-byte unicode
       const attrs = data.attrs || null
       let afterId = crdt.getIdAtOffset(data.offset - 1)
-      let firstOffset = null
 
+      // Build all insert ops
+      const insertOps = []
       for (let i = 0; i < chars.length; i++) {
         const id = `${data.clientId}:${Date.now()}:${Math.random()}`
-        op = {type:"insert", id, value:chars[i], after:afterId, attrs}
-        const actualOffset = docs.applyOperationWithBatching(docId, op, data.clientId)
-        if (i === 0) firstOffset = actualOffset
-        afterId = id // next char goes after this one
+        insertOps.push({type:"insert", id, value:chars[i], after:afterId, attrs})
+        afterId = id
+      }
+
+      let firstOffset
+      if (insertOps.length === 1) {
+        // Single char — use the normal queue path
+        firstOffset = docs.applyOperationWithBatching(docId, insertOps[0], data.clientId)
+      } else {
+        // Bulk — apply to CRDT + single batch DB write, skip queue
+        firstOffset = docs.applyBulkInsert(docId, insertOps, data.clientId)
       }
 
       broadcastOp = {type:"insert", offset: firstOffset, value:data.value, clientId:data.clientId, attrs}

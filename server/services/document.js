@@ -155,6 +155,34 @@ class DocumentService {
     return actualOffset
   }
 
+  /**
+   * Apply a bulk insert (e.g. paste) — all chars go to CRDT then to DB in
+   * one batch transaction, bypassing the per-keystroke queue entirely.
+   * @param {string} docId
+   * @param {Array<{id,value,after,attrs}>} ops - ordered insert operations
+   * @param {string} clientId
+   * @returns {number} offset of the first inserted character
+   */
+  applyBulkInsert(docId, ops, clientId) {
+    const doc = this.loadDocument(docId)
+
+    for (const op of ops) {
+      doc.insert(op.value, op.after, op.id, op.attrs)
+    }
+
+    const firstOffset = doc.getOffsetOfId(ops[0].id)
+
+    // Single batch write — no queue involvement
+    if (this.storage.saveOperationBatch) {
+      this.storage.saveOperationBatch(docId, ops)
+    } else {
+      for (const op of ops) this.storage.saveOperation(docId, op)
+    }
+
+    this.operationCounts.set(docId, (this.operationCounts.get(docId) || 0) + ops.length)
+    return firstOffset
+  }
+
   getText(docId){
     return this.loadDocument(docId).getText()
   }
