@@ -65,14 +65,12 @@ body { font-family:sans-serif; padding:20px 40px; box-sizing:border-box; display
 
 .remote-cursor {
   position:absolute; width:2px; pointer-events:none; z-index:5;
-  animation: blink 1s step-end infinite;
 }
 .remote-cursor .cursor-label {
   position:absolute; top:-18px; left:-1px; font-size:10px;
   color:#fff; padding:1px 4px; border-radius:3px 3px 3px 0;
   white-space:nowrap; pointer-events:none; line-height:1.4;
 }
-@keyframes blink { 50% { opacity:0; } }
 .remote-selection {
   position:absolute; pointer-events:none; z-index:4; opacity:0.25;
 }
@@ -514,7 +512,7 @@ function renderRemoteCursors() {
             const div = document.createElement('div')
             div.className = 'remote-selection'
             div.style.background = color
-            div.style.top = (rect.top - editorRect.top + editor.scrollTop) + 'px'
+            div.style.top = (rect.top - editorRect.top ) + 'px'
             div.style.left = (rect.left - editorRect.left) + 'px'
             div.style.width = rect.width + 'px'
             div.style.height = rect.height + 'px'
@@ -536,7 +534,7 @@ function renderRemoteCursors() {
           const caret = document.createElement('div')
           caret.className = 'remote-cursor'
           caret.style.background = color
-          caret.style.top = (rect.top - editorRect.top + editor.scrollTop) + 'px'
+          caret.style.top = (rect.top - editorRect.top ) + 'px'
           caret.style.left = (rect.left - editorRect.left) + 'px'
           caret.style.height = rect.height + 'px'
 
@@ -610,7 +608,7 @@ function showBlurSelection() {
     div.className = 'blur-selection'
     div.style.cssText = `position:absolute;pointer-events:none;z-index:4;` +
       `background:${myColor};opacity:0.25;` +
-      `top:${rect.top - editorRect.top + editor.scrollTop}px;` +
+      `top:${rect.top - editorRect.top }px;` +
       `left:${rect.left - editorRect.left}px;` +
       `width:${rect.width}px;height:${rect.height}px;`
     cursorOverlay.appendChild(div)
