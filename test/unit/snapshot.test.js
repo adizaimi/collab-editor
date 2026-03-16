@@ -436,41 +436,153 @@ await runTest("batched insert with emoji expands correctly", () => {
   assertEquals(text, '😀AB', "should correctly expand batched insert with emoji")
 })
 
-// Test 17: Snapshot compact invalidates old IDs - new ops must use new IDs
-console.log("\n[Test 17] Operations after snapshot compact use compacted IDs")
-await runTest("post-compact operations use valid IDs", async () => {
+// Test 17: Snapshot without tombstones preserves IDs (no unnecessary compact)
+console.log("\n[Test 17] Snapshot without tombstones preserves original IDs")
+await runTest("snapshot without tombstones preserves IDs", async () => {
   const testStorage = new SQLiteStorage()
   testStorage.db = require('better-sqlite3')(':memory:')
   testStorage.init()
 
   const docService = new DocumentService(testStorage, false)
 
-  // Build document
+  // Build document (no deletions = no tombstones)
   docService.applyOperation('doc17', { type: 'insert', id: 'id1', value: 'X', after: 'ROOT' })
   docService.applyOperation('doc17', { type: 'insert', id: 'id2', value: 'Y', after: 'id1' })
 
-  // Snapshot compacts CRDT, old IDs gone
+  // Snapshot should NOT compact (no tombstones), preserving IDs
   await docService.createSnapshot('doc17')
 
-  // Wait to ensure new operation has a later timestamp than the snapshot
   let now17 = Date.now()
   while (Date.now() - now17 < 5) { /* wait 5ms */ }
 
   const crdt = docService.getCRDT('doc17')
-  // Old IDs should NOT exist
-  assert(!crdt.chars.has('id1'), "old id1 should not exist after compact")
-  assert(!crdt.chars.has('id2'), "old id2 should not exist after compact")
+  // IDs should still exist because compact was skipped (no tombstones)
+  assert(crdt.chars.has('id1'), "id1 should still exist (no tombstones to compact)")
+  assert(crdt.chars.has('id2'), "id2 should still exist (no tombstones to compact)")
 
-  // Must look up current IDs
-  const afterId = crdt.getIdAtOffset(1) // current ID of 'Y'
-  assert(afterId !== 'ROOT', "should find a valid ID at offset 1")
-
-  docService.applyOperation('doc17', { type: 'insert', id: 'id3', value: 'Z', after: afterId })
-  assertEquals(docService.getText('doc17'), 'XYZ', "insert with new ID after compact works")
+  // Operations using original IDs should still work
+  docService.applyOperation('doc17', { type: 'insert', id: 'id3', value: 'Z', after: 'id2' })
+  assertEquals(docService.getText('doc17'), 'XYZ', "insert with original ID works")
 
   // Simulate restart - verify persistence
   const docService2 = new DocumentService(testStorage, false)
   assertEquals(docService2.getText('doc17'), 'XYZ', "document correct after restart")
+})
+
+// Test 18: Snapshot WITH tombstones does compact and replaces IDs
+console.log("\n[Test 18] Snapshot with tombstones compacts and replaces IDs")
+await runTest("snapshot with tombstones compacts IDs", async () => {
+  const testStorage = new SQLiteStorage()
+  testStorage.db = require('better-sqlite3')(':memory:')
+  testStorage.init()
+
+  const docService = new DocumentService(testStorage, false)
+
+  docService.applyOperation('doc18', { type: 'insert', id: 'id1', value: 'A', after: 'ROOT' })
+  docService.applyOperation('doc18', { type: 'insert', id: 'id2', value: 'B', after: 'id1' })
+  docService.applyOperation('doc18', { type: 'delete', id: 'id1' }) // creates tombstone
+
+  await docService.createSnapshot('doc18')
+
+  const crdt = docService.getCRDT('doc18')
+  // Old IDs should be gone after compact (tombstones existed)
+  assert(!crdt.chars.has('id1'), "old id1 should not exist after compact")
+  assert(!crdt.chars.has('id2'), "old id2 should not exist after compact")
+
+  // New IDs work via offset lookup
+  const bId = crdt.getIdAtOffset(0)
+  assert(bId !== 'ROOT', "should find compacted ID at offset 0")
+  assertEquals(docService.getText('doc18'), 'B', "text correct after compact")
+
+  // Simulate restart
+  const docService2 = new DocumentService(testStorage, false)
+  assertEquals(docService2.getText('doc18'), 'B', "document correct after restart")
+})
+
+// Test 19: Operations added after a tombstone-triggered compact survive restart
+console.log("\n[Test 19] Post-compact operations persist correctly across restart")
+await runTest("post-compact ops survive restart", async () => {
+  const testStorage = new SQLiteStorage()
+  testStorage.db = require('better-sqlite3')(':memory:')
+  testStorage.init()
+
+  const docService = new DocumentService(testStorage, false)
+
+  // Build document with a deletion (creates tombstone → compact will run)
+  docService.applyOperation('doc19', { type: 'insert', id: 'a', value: 'A', after: 'ROOT' })
+  docService.applyOperation('doc19', { type: 'insert', id: 'b', value: 'B', after: 'a' })
+  docService.applyOperation('doc19', { type: 'insert', id: 'c', value: 'C', after: 'b' })
+  docService.applyOperation('doc19', { type: 'delete', id: 'b' }) // tombstone
+
+  let now = Date.now()
+  while (Date.now() - now < 5) {}
+
+  // Snapshot triggers compact (tombstone exists), replacing all IDs
+  await docService.createSnapshot('doc19')
+
+  now = Date.now()
+  while (Date.now() - now < 5) {}
+
+  // Add new operations using compacted IDs
+  const crdt19 = docService.getCRDT('doc19')
+  const lastId = crdt19.getIdAtOffset(1) // 'C' in compacted CRDT
+  docService.applyOperation('doc19', { type: 'insert', id: 'new1', value: 'D', after: lastId })
+  docService.applyOperation('doc19', { type: 'insert', id: 'new2', value: 'E', after: 'new1' })
+  assertEquals(docService.getText('doc19'), 'ACDE', "text correct before restart")
+
+  // Simulate restart — loads snapshot + replays recent ops
+  const docService2 = new DocumentService(testStorage, false)
+  assertEquals(docService2.getText('doc19'), 'ACDE', "post-compact ops survive restart")
+})
+
+// Test 20: Consecutive snapshots without edits are idempotent
+console.log("\n[Test 20] Consecutive snapshots without edits are idempotent")
+await runTest("consecutive snapshots preserve document", async () => {
+  const testStorage = new SQLiteStorage()
+  testStorage.db = require('better-sqlite3')(':memory:')
+  testStorage.init()
+
+  const docService = new DocumentService(testStorage, false)
+
+  docService.applyOperation('doc20', { type: 'insert', id: 'x1', value: 'H', after: 'ROOT' })
+  docService.applyOperation('doc20', { type: 'insert', id: 'x2', value: 'i', after: 'x1' })
+
+  let now = Date.now()
+  while (Date.now() - now < 5) {}
+
+  // Create multiple snapshots in a row (simulates the snapshot storm)
+  await docService.createSnapshot('doc20')
+  now = Date.now()
+  while (Date.now() - now < 5) {}
+  await docService.createSnapshot('doc20')
+  now = Date.now()
+  while (Date.now() - now < 5) {}
+  await docService.createSnapshot('doc20')
+
+  assertEquals(docService.getText('doc20'), 'Hi', "text intact after 3 consecutive snapshots")
+
+  // IDs should be preserved (no tombstones → no compact)
+  const crdt20 = docService.getCRDT('doc20')
+  assert(crdt20.chars.has('x1'), "original IDs preserved through multiple snapshots")
+
+  // Restart still works
+  const docService2 = new DocumentService(testStorage, false)
+  assertEquals(docService2.getText('doc20'), 'Hi', "document correct after restart")
+})
+
+// Test 21: compact() returns zero removal when no tombstones
+console.log("\n[Test 21] compact() short-circuits with no tombstones")
+await runTest("compact returns removed=0 without tombstones", () => {
+  const crdt = new CRDTText()
+  crdt.insert('a', 'ROOT', 'id1')
+  crdt.insert('b', 'id1', 'id2')
+
+  const result = crdt.compact()
+  assertEquals(result.removed, 0, "should report 0 removed")
+  assertEquals(result.oldSize, result.newSize, "sizes should match")
+  assert(crdt.chars.has('id1'), "original id1 should still exist")
+  assert(crdt.chars.has('id2'), "original id2 should still exist")
+  assertEquals(crdt.getText(), 'ab', "text unchanged")
 })
 
 console.log("\n" + "=".repeat(60))

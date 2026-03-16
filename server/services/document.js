@@ -218,6 +218,17 @@ class DocumentService {
     const compactResult = doc.compact()
     if (compactResult.removed > 0) {
       console.log(`[Snapshot] Compacted ${docId}: removed ${compactResult.removed} tombstones (${compactResult.compressionRatio}% reduction)`)
+
+      // Re-flush: operations enqueued during the first flush reference pre-compact
+      // IDs that no longer exist. Flush them now so they're captured before we
+      // save the snapshot (they'll be deleted with the old ops below).
+      if (this.buffer) {
+        if (this.isAsync) {
+          await this.buffer.flush(docId)
+        } else {
+          this.buffer.flush(docId)
+        }
+      }
     }
 
     // Store serialized CRDT state (preserves full structure for correct reload)

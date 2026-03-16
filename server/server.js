@@ -31,6 +31,7 @@ const SNAPSHOT_IDLE_TIME = 10000 // Create snapshot after 10s of inactivity
 // Track last operation time per document for idle snapshots
 const lastOperationTime = new Map()
 const snapshotTimers = new Map()
+const snapshotInProgress = new Set() // Guard against cascading snapshot creation
 
 const app = express()
 app.use(express.static("public"))
@@ -332,7 +333,7 @@ wss.on("connection",(ws,req)=>{
     }, SNAPSHOT_IDLE_TIME))
 
     // Check if snapshot needed based on operation count
-    if(docs.shouldCreateSnapshot(docId, SNAPSHOT_THRESHOLD)){
+    if(!snapshotInProgress.has(docId) && docs.shouldCreateSnapshot(docId, SNAPSHOT_THRESHOLD)){
       await createSnapshot(docId)
     }
   })
@@ -359,11 +360,15 @@ wss.on("connection",(ws,req)=>{
 
 // Helper function to create snapshot
 async function createSnapshot(docId) {
+  if (snapshotInProgress.has(docId)) return
+  snapshotInProgress.add(docId)
   try {
     await docs.createSnapshot(docId)
     console.log(`[Snapshot] Created snapshot for document: ${docId}`)
   } catch (err) {
     console.error(`[Snapshot] Error creating snapshot for ${docId}:`, err)
+  } finally {
+    snapshotInProgress.delete(docId)
   }
 }
 

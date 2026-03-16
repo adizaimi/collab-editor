@@ -196,8 +196,21 @@ class CRDTText {
    * This prevents unbounded memory growth from deleted characters
    */
   compact() {
-    const formattedChars = this.getFormattedChars()
+    // Count tombstones to decide if compaction is needed
+    let tombstones = 0
+    for (const [id, node] of this.chars) {
+      if (id !== this.root && node.deleted) tombstones++
+    }
+
     const oldSize = this.chars.size
+
+    // Skip rebuild if no tombstones — avoids replacing IDs which
+    // would invalidate any operations still sitting in the async queue
+    if (tombstones === 0) {
+      return { oldSize, newSize: oldSize, removed: 0, compressionRatio: 0 }
+    }
+
+    const formattedChars = this.getFormattedChars()
 
     // Rebuild CRDT from current visible chars, preserving attrs
     this.chars.clear()
