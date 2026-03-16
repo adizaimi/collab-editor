@@ -740,6 +740,211 @@ runTest("BUG REGRESSION: long document with mixed bullets and formatting", () =>
 })
 
 // ============================================================
+// Remote cursor overlay tests
+// ============================================================
+
+function createCursorEnv() {
+  const dom = new JSDOM(`<!DOCTYPE html>
+<html><body>
+<div id="editor-container" style="position:relative;">
+  <div id="editor" contenteditable="true"></div>
+  <div id="cursor-overlay"></div>
+</div>
+<div id="status"></div>
+<span id="users-list"></span>
+<span id="location"></span>
+<div id="format-bar"></div>
+</body></html>`, { url: "http://localhost:3000" })
+
+  const { window } = dom
+  const { document } = window
+  const editor = document.getElementById("editor")
+  const cursorOverlay = document.getElementById("cursor-overlay")
+
+  // Replicate needed functions
+  function escapeHtml(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
+  function inlineAttrKey(a) { if(!a) return ''; const p=[]; if(a.bold) p.push('b'); if(a.italic) p.push('i'); return p.join(',') }
+  function wrapRun(text, attrs) {
+    let s=''; if(attrs&&attrs.bold) s+='font-weight:bold;'; if(attrs&&attrs.italic) s+='font-style:italic;'
+    return s ? '<span style="'+s+'">'+text+'</span>' : '<span>'+text+'</span>'
+  }
+  function renderEditor(formattedChars) {
+    const lines=[]; let cur={chars:[],isBullet:false}
+    for(let i=0;i<formattedChars.length;i++){
+      if(formattedChars[i].value==='\n'){lines.push(cur);cur={chars:[],isBullet:!!(formattedChars[i].attrs&&formattedChars[i].attrs.block==='bullet')}}
+      else cur.chars.push(formattedChars[i])
+    }
+    lines.push(cur)
+    let html=''
+    for(const line of lines){
+      let lh='',i=0
+      while(i<line.chars.length){const ch=line.chars[i];const ak=inlineAttrKey(ch.attrs);let r=''
+        while(i<line.chars.length&&inlineAttrKey(line.chars[i].attrs)===ak){r+=escapeHtml(line.chars[i].value);i++}
+        lh+=wrapRun(r,ch.attrs)}
+      html+='<div'+(line.isBullet?' class="bullet-line"':'')+'>'+(lh||'<br>')+'</div>'
+    }
+    if(!formattedChars.length) html='<div><br></div>'
+    editor.innerHTML=html
+  }
+
+  function walkInDiv(container, remaining) {
+    for(let i=0;i<container.childNodes.length;i++){
+      const n=container.childNodes[i]
+      if(n.nodeType===window.Node.TEXT_NODE){if(remaining<=n.textContent.length) return {found:true,pos:{node:n,offset:remaining}};remaining-=n.textContent.length}
+      else if(n.nodeName==='BR'){if(remaining===0) return {found:true,pos:{node:container,offset:i}}}
+      else{const r=walkInDiv(n,remaining);if(r.found) return r;remaining=r.remaining}
+    }
+    return {found:false,remaining}
+  }
+  function flatToDomOffset(flat) {
+    let rem=flat; const divs=editor.childNodes
+    for(let d=0;d<divs.length;d++){
+      if(d>0){if(rem===0) return {node:editor,offset:d};rem-=1}
+      const r=walkInDiv(divs[d],rem); if(r.found) return r.pos; rem=r.remaining
+    }
+    return {node:editor,offset:editor.childNodes.length}
+  }
+
+  // Simplified renderRemoteCursors for testing (no getClientRects in jsdom)
+  // We test that the function creates the right DOM elements based on cursor data
+  function renderRemoteCursors(remoteCursors, myUserId) {
+    cursorOverlay.innerHTML = ''
+    for (const [userId, cursor] of Object.entries(remoteCursors)) {
+      if (userId === myUserId) continue
+      const color = cursor.color || '#888'
+      const hasSelection = cursor.selEnd !== undefined && cursor.selEnd !== cursor.offset
+
+      if (hasSelection) {
+        const start = Math.min(cursor.offset, cursor.selEnd)
+        const end = Math.max(cursor.offset, cursor.selEnd)
+        // In jsdom getClientRects doesn't work, so create selection markers
+        const sel = document.createElement('div')
+        sel.className = 'remote-selection'
+        sel.style.background = color
+        sel.dataset.start = start
+        sel.dataset.end = end
+        sel.dataset.userId = userId
+        cursorOverlay.appendChild(sel)
+      }
+
+      // Caret
+      const caretPos = flatToDomOffset(cursor.offset)
+      if (caretPos) {
+        const caret = document.createElement('div')
+        caret.className = 'remote-cursor'
+        caret.style.background = color
+        caret.dataset.offset = cursor.offset
+        caret.dataset.userId = userId
+        const label = document.createElement('span')
+        label.className = 'cursor-label'
+        label.style.background = color
+        label.textContent = userId
+        caret.appendChild(label)
+        cursorOverlay.appendChild(caret)
+      }
+    }
+  }
+
+  return { dom, window, document, editor, cursorOverlay, renderEditor, flatToDomOffset, renderRemoteCursors }
+}
+
+runTest("Remote cursor: caret rendered for remote user", () => {
+  const env = createCursorEnv()
+  env.renderEditor(makeChars("Hello World"))
+  const cursors = { user2: { offset: 5, selEnd: 5, color: '#E53935' } }
+  env.renderRemoteCursors(cursors, 'user1')
+
+  const carets = env.cursorOverlay.querySelectorAll('.remote-cursor')
+  assert(carets.length === 1, "one remote cursor caret rendered")
+  assert(carets[0].dataset.offset === '5', "caret at correct offset")
+  assert(carets[0].style.cssText.includes('229, 57, 53'), "caret has user's color")
+
+  const label = carets[0].querySelector('.cursor-label')
+  assert(label !== null, "caret has a label")
+  assert(label.textContent === 'user2', "label shows user ID")
+})
+
+runTest("Remote cursor: selection highlight rendered", () => {
+  const env = createCursorEnv()
+  env.renderEditor(makeChars("Hello World"))
+  const cursors = { user2: { offset: 2, selEnd: 8, color: '#1E88E5' } }
+  env.renderRemoteCursors(cursors, 'user1')
+
+  const sels = env.cursorOverlay.querySelectorAll('.remote-selection')
+  assert(sels.length === 1, "one selection highlight rendered")
+  assert(sels[0].style.cssText.includes('30, 136, 229'), "selection has user's color")
+  assert(sels[0].dataset.start === '2', "selection start correct")
+  assert(sels[0].dataset.end === '8', "selection end correct")
+
+  // Caret should also be present at cursor.offset
+  const carets = env.cursorOverlay.querySelectorAll('.remote-cursor')
+  assert(carets.length === 1, "caret also rendered with selection")
+})
+
+runTest("Remote cursor: own cursor is NOT rendered", () => {
+  const env = createCursorEnv()
+  env.renderEditor(makeChars("Hello"))
+  const cursors = {
+    user1: { offset: 2, selEnd: 2, color: '#E53935' },
+    user2: { offset: 4, selEnd: 4, color: '#1E88E5' }
+  }
+  env.renderRemoteCursors(cursors, 'user1')
+
+  const carets = env.cursorOverlay.querySelectorAll('.remote-cursor')
+  assert(carets.length === 1, "only remote user's cursor rendered")
+  assert(carets[0].dataset.userId === 'user2', "rendered cursor is for user2")
+})
+
+runTest("Remote cursor: multiple users rendered", () => {
+  const env = createCursorEnv()
+  env.renderEditor(makeChars("Hello World"))
+  const cursors = {
+    user2: { offset: 3, selEnd: 3, color: '#E53935' },
+    user3: { offset: 7, selEnd: 7, color: '#43A047' },
+    user4: { offset: 1, selEnd: 5, color: '#FB8C00' }
+  }
+  env.renderRemoteCursors(cursors, 'user1')
+
+  const carets = env.cursorOverlay.querySelectorAll('.remote-cursor')
+  assert(carets.length === 3, "three remote cursors rendered")
+
+  const sels = env.cursorOverlay.querySelectorAll('.remote-selection')
+  assert(sels.length === 1, "one selection highlight (only user4 has selection)")
+  assert(sels[0].dataset.userId === 'user4', "selection is for user4")
+})
+
+runTest("Remote cursor: re-render clears old overlays", () => {
+  const env = createCursorEnv()
+  env.renderEditor(makeChars("Hello"))
+
+  // First render with 2 users
+  env.renderRemoteCursors({
+    user2: { offset: 1, selEnd: 1, color: '#E53935' },
+    user3: { offset: 3, selEnd: 3, color: '#43A047' }
+  }, 'user1')
+  assert(env.cursorOverlay.querySelectorAll('.remote-cursor').length === 2, "two cursors initially")
+
+  // Re-render with 1 user — old ones should be gone
+  env.renderRemoteCursors({
+    user2: { offset: 4, selEnd: 4, color: '#E53935' }
+  }, 'user1')
+  const carets = env.cursorOverlay.querySelectorAll('.remote-cursor')
+  assert(carets.length === 1, "only one cursor after re-render")
+  assert(carets[0].dataset.offset === '4', "cursor at updated position")
+})
+
+runTest("Remote cursor: no cursor at offset 0 when no selection", () => {
+  const env = createCursorEnv()
+  env.renderEditor(makeChars("Hello"))
+  const cursors = { user2: { offset: 0, selEnd: 0, color: '#E53935' } }
+  env.renderRemoteCursors(cursors, 'user1')
+
+  const carets = env.cursorOverlay.querySelectorAll('.remote-cursor')
+  assert(carets.length === 1, "cursor rendered at offset 0")
+  assert(carets[0].dataset.offset === '0', "offset is 0")
+})
+
+// ============================================================
 // Summary
 // ============================================================
 

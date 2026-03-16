@@ -63,6 +63,24 @@ body { font-family:sans-serif; padding:20px 40px; box-sizing:border-box; display
 }
 #editor:focus { border-color:#80b0ff; }
 
+.remote-cursor {
+  position:absolute; width:2px; pointer-events:none; z-index:5;
+  animation: blink 1s step-end infinite;
+}
+.remote-cursor .cursor-label {
+  position:absolute; top:-18px; left:-1px; font-size:10px;
+  color:#fff; padding:1px 4px; border-radius:3px 3px 3px 0;
+  white-space:nowrap; pointer-events:none; line-height:1.4;
+}
+@keyframes blink { 50% { opacity:0; } }
+.remote-selection {
+  position:absolute; pointer-events:none; z-index:4; opacity:0.25;
+}
+#cursor-overlay {
+  position:absolute; top:0; left:0; width:100%; height:100%;
+  pointer-events:none; z-index:5; overflow:hidden;
+}
+
 .bullet-line {
   display:block; padding-left:24px; position:relative;
 }
@@ -123,6 +141,7 @@ body { font-family:sans-serif; padding:20px 40px; box-sizing:border-box; display
 </div>
 <div id="editor-container">
   <div id="editor" contenteditable="true" spellcheck="false"></div>
+  <div id="cursor-overlay"></div>
 </div>
 <div id="location-bar">Location: <span id="location">Ln 1, Col 1</span></div>
 
@@ -441,9 +460,81 @@ usersListEl.addEventListener("click", (e) => {
   if (!userId || userId === myUserId) return
   const cursor = remoteCursors[userId]
   if (!cursor) return
-  editor.focus()
-  setSelectionOffsets(cursor.offset, cursor.selEnd || cursor.offset)
+  // Scroll the remote cursor into view without hijacking the local selection
+  const pos = flatToDomOffset(cursor.offset)
+  if (pos && pos.node) {
+    const target = pos.node.nodeType === Node.TEXT_NODE ? pos.node.parentNode : pos.node
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
 })
+
+// --- Remote cursor overlays ---
+
+const cursorOverlay = document.getElementById("cursor-overlay")
+
+function renderRemoteCursors() {
+  cursorOverlay.innerHTML = ''
+  const editorRect = editor.getBoundingClientRect()
+
+  for (const [userId, cursor] of Object.entries(remoteCursors)) {
+    if (userId === myUserId) continue
+    const color = cursor.color || '#888'
+    const hasSelection = cursor.selEnd !== undefined && cursor.selEnd !== cursor.offset
+
+    if (hasSelection) {
+      // Draw selection highlight rectangles
+      const start = Math.min(cursor.offset, cursor.selEnd)
+      const end = Math.max(cursor.offset, cursor.selEnd)
+      const startPos = flatToDomOffset(start)
+      const endPos = flatToDomOffset(end)
+      if (startPos && endPos) {
+        try {
+          const range = document.createRange()
+          range.setStart(startPos.node, startPos.offset)
+          range.setEnd(endPos.node, endPos.offset)
+          const rects = range.getClientRects()
+          for (const rect of rects) {
+            const div = document.createElement('div')
+            div.className = 'remote-selection'
+            div.style.background = color
+            div.style.top = (rect.top - editorRect.top + editor.scrollTop) + 'px'
+            div.style.left = (rect.left - editorRect.left) + 'px'
+            div.style.width = rect.width + 'px'
+            div.style.height = rect.height + 'px'
+            cursorOverlay.appendChild(div)
+          }
+        } catch(e) { /* ignore range errors */ }
+      }
+    }
+
+    // Draw cursor caret at the cursor.offset position
+    const caretPos = flatToDomOffset(cursor.offset)
+    if (caretPos) {
+      try {
+        const range = document.createRange()
+        range.setStart(caretPos.node, caretPos.offset)
+        range.collapse(true)
+        const rect = range.getClientRects()[0] || range.getBoundingClientRect()
+        if (rect && rect.height > 0) {
+          const caret = document.createElement('div')
+          caret.className = 'remote-cursor'
+          caret.style.background = color
+          caret.style.top = (rect.top - editorRect.top + editor.scrollTop) + 'px'
+          caret.style.left = (rect.left - editorRect.left) + 'px'
+          caret.style.height = rect.height + 'px'
+
+          const label = document.createElement('span')
+          label.className = 'cursor-label'
+          label.style.background = color
+          label.textContent = userId
+          caret.appendChild(label)
+
+          cursorOverlay.appendChild(caret)
+        }
+      } catch(e) { /* ignore range errors */ }
+    }
+  }
+}
 
 // --- Location bar ---
 
@@ -481,6 +572,8 @@ document.addEventListener('selectionchange', () => {
   updateFormatButtonState()
   sendCursorUpdate()
 })
+
+editor.addEventListener('scroll', renderRemoteCursors)
 
 // --- Format button state ---
 
@@ -672,6 +765,7 @@ function connect() {
         renderUsers()
       }
       renderEditor()
+      renderRemoteCursors()
       updateLocation()
     }
 
@@ -679,6 +773,7 @@ function connect() {
       currentUsers = msg.users
       syncRemoteCursors()
       renderUsers()
+      renderRemoteCursors()
     }
 
     if (msg.type === "cursor") {
@@ -687,6 +782,7 @@ function connect() {
         selEnd: msg.selEnd,
         color: msg.color
       }
+      renderRemoteCursors()
     }
 
     if (msg.type === "op") {
@@ -747,6 +843,7 @@ function scheduleRender() {
     }
     applying = false
     pendingCursorShift = 0
+    renderRemoteCursors()
     updateLocation()
   })
 }
