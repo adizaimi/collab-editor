@@ -261,15 +261,20 @@ wss.on("connection",(ws,req)=>{
     let broadcastOp = null
 
     if(data.type==="insert"){
-      const afterId = crdt.getIdAtOffset(data.offset - 1)
+      const chars = Array.from(data.value) // handles multi-char paste + multi-byte unicode
       const attrs = data.attrs || null
-      // Include clientId to prevent ID collisions across concurrent clients
-      op = {type:"insert", id:`${data.clientId}:${Date.now()}:${Math.random()}`, value:data.value, after:afterId, attrs}
+      let afterId = crdt.getIdAtOffset(data.offset - 1)
+      let firstOffset = null
 
-      // Apply with batching
-      const actualOffset = docs.applyOperationWithBatching(docId, op, data.clientId)
+      for (let i = 0; i < chars.length; i++) {
+        const id = `${data.clientId}:${Date.now()}:${Math.random()}`
+        op = {type:"insert", id, value:chars[i], after:afterId, attrs}
+        const actualOffset = docs.applyOperationWithBatching(docId, op, data.clientId)
+        if (i === 0) firstOffset = actualOffset
+        afterId = id // next char goes after this one
+      }
 
-      broadcastOp = {type:"insert", offset: actualOffset, value:data.value, clientId:data.clientId, attrs}
+      broadcastOp = {type:"insert", offset: firstOffset, value:data.value, clientId:data.clientId, attrs}
     } else if(data.type==="delete"){
       // Use getIdAtOffset for O(offset) lookup instead of O(n) getVisibleChars()
       const charId = crdt.getIdAtOffset(data.offset)

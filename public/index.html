@@ -727,22 +727,46 @@ function scheduleReconnect() {
 // We SKIP ops that originated from us (same clientId) because we already
 // applied them optimistically in the input handler.
 
+// Pending cursor adjustment from batched remote ops
+let pendingCursorShift = 0
+let renderScheduled = false
+
+function scheduleRender() {
+  if (renderScheduled) return
+  renderScheduled = true
+  requestAnimationFrame(() => {
+    renderScheduled = false
+    applying = true
+    const savedSel = getSelectionOffsets()
+    renderEditor()
+    if (document.activeElement === editor) {
+      setSelectionOffsets(
+        Math.max(0, savedSel.start + pendingCursorShift),
+        Math.max(0, savedSel.end + pendingCursorShift)
+      )
+    }
+    applying = false
+    pendingCursorShift = 0
+    updateLocation()
+  })
+}
+
 function applyRemoteOp(op) {
   // Skip our own echoed operations — already applied optimistically
   if (op.clientId === clientId) return
 
-  const savedSel = getSelectionOffsets()
-  let cursorShift = 0
-
   if (op.type === "insert") {
+    const chars = Array.from(op.value)
     const arr = Array.from(serverText)
-    arr.splice(op.offset, 0, op.value)
+    arr.splice(op.offset, 0, ...chars)
     serverText = arr.join("")
 
     const attrs = op.attrs ? { ...op.attrs } : {}
-    formattedChars.splice(op.offset, 0, { value: op.value, attrs })
+    const newChars = chars.map(ch => ({ value: ch, attrs: { ...attrs } }))
+    formattedChars.splice(op.offset, 0, ...newChars)
 
-    if (op.offset <= savedSel.start) cursorShift = 1
+    const savedSel = getSelectionOffsets()
+    if (op.offset <= savedSel.start) pendingCursorShift += chars.length
   } else if (op.type === "delete") {
     if (op.offset < serverText.length) {
       const arr = Array.from(serverText)
@@ -750,7 +774,8 @@ function applyRemoteOp(op) {
       serverText = arr.join("")
       formattedChars.splice(op.offset, 1)
 
-      if (op.offset < savedSel.start) cursorShift = -1
+      const savedSel = getSelectionOffsets()
+      if (op.offset < savedSel.start) pendingCursorShift -= 1
     }
   } else if (op.type === "format") {
     const start = op.offset
@@ -767,17 +792,7 @@ function applyRemoteOp(op) {
     }
   }
 
-  // Re-render and restore cursor
-  applying = true
-  renderEditor()
-  if (document.activeElement === editor) {
-    setSelectionOffsets(
-      Math.max(0, savedSel.start + cursorShift),
-      Math.max(0, savedSel.end + cursorShift)
-    )
-  }
-  applying = false
-  updateLocation()
+  scheduleRender()
 }
 
 // --- Editor input handling ---
@@ -848,16 +863,15 @@ editor.addEventListener("beforeinput", (e) => {
       serverText = serverText.slice(0, lastSelStart) + serverText.slice(lastSelEnd)
     }
 
-    // Insert chars
-    for (let i = 0; i < text.length; i++) {
-      let attrs = {}
-      if (lastSelStart + i > 0 && formattedChars.length > 0) {
-        attrs = { ...formattedChars[Math.min(lastSelStart + i - 1, formattedChars.length - 1)].attrs }
-        delete attrs.block
-      }
-      sendOp({ type: "insert", value: text[i], offset: lastSelStart + i, clientId, attrs: Object.keys(attrs).length > 0 ? attrs : undefined })
-      formattedChars.splice(lastSelStart + i, 0, { value: text[i], attrs })
+    // Insert pasted text as a single bulk message
+    let attrs = {}
+    if (lastSelStart > 0 && formattedChars.length > 0) {
+      attrs = { ...formattedChars[Math.min(lastSelStart - 1, formattedChars.length - 1)].attrs }
+      delete attrs.block
     }
+    sendOp({ type: "insert", value: text, offset: lastSelStart, clientId, attrs: Object.keys(attrs).length > 0 ? attrs : undefined })
+    const newChars = Array.from(text).map(ch => ({ value: ch, attrs: { ...attrs } }))
+    formattedChars.splice(lastSelStart, 0, ...newChars)
     serverText = serverText.slice(0, lastSelStart) + text + serverText.slice(lastSelStart)
 
     // Re-render and place cursor after pasted text
