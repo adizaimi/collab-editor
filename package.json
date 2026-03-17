@@ -1,5 +1,5 @@
 {
-  "name": "doc-editor",
+  "name": "collab-editor",
   "version": "1.0.0",
   "main": "server/server.js",
   "type": "commonjs",

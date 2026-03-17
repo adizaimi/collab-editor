@@ -121,7 +121,7 @@ npm run test:e2e               # Server-client integration
 ## 📁 Project Structure
 
 ```
-doc-editor/
+collab-editor/
 ├── server/
 │   ├── crdt/
 │   │   └── text.js              # CRDT implementation (iterative traversal)
